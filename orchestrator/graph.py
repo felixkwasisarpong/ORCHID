@@ -79,7 +79,7 @@ def build_example_graph(
     tool_name = os.getenv("MCP_TOOL_NAME")
     transport = getattr(mcp_client, "transport", MCPTransport.HTTP)
     if tool_name is None:
-        tool_name = "synthetic_tool" if transport == MCPTransport.HTTP else "list_files"
+        tool_name = "synthetic_tool" if transport == MCPTransport.HTTP else "list_directory"
     payload_override = None
     tool_args_json = os.getenv("MCP_TOOL_ARGS_JSON")
     if tool_args_json:
@@ -87,7 +87,7 @@ def build_example_graph(
             payload_override = json.loads(tool_args_json)
         except json.JSONDecodeError:
             payload_override = None
-    elif tool_name == "list_files":
+    elif tool_name in {"list_files", "list_directory"}:
         payload_override = {"path": os.getenv("MCP_TOOL_PATH", ".")}
 
     plan_node = PlanningNode(

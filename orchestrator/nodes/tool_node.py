@@ -52,6 +52,8 @@ class ToolNode(BaseNode):
             request_id=state.request_id,
             fault=self.fault_config,
         )
+        if isinstance(response.output, dict) and response.output.get("isError") is True:
+            return state.add_error(f"{self.name} failed: {response.output}")
         self.logger.info(
             "tool_response",
             extra={

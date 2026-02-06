@@ -22,7 +22,7 @@ services:
       MCP_BASE_URL: "http://mcp:9000"
       MCP_TRANSPORT: "stdio"
       MCP_FS_PATHS: "/app"
-      MCP_TOOL_NAME: "list_files"
+      MCP_TOOL_NAME: "list_directory"
       MCP_TOOL_PATH: "/app"
       OLLAMA_BASE_URL: "http://ollama:11434"
     env_file:

@@ -60,8 +60,9 @@ Configure via env:
 ```
 MCP_TRANSPORT=stdio
 MCP_FS_PATHS=/app
-MCP_TOOL_NAME=list_files
+MCP_TOOL_NAME=list_directory
 MCP_TOOL_PATH=/app
+MCP_STDIO_REUSE_SESSION=false
 ```
 
 If you want the synthetic HTTP MCP server instead, set `MCP_TRANSPORT=http` and run the server below.
