@@ -36,7 +36,7 @@ Research-grade scaffold for hybrid agent orchestration combining a graph control
 poetry install
 ```
 
-Optional CrewAI support:
+Optional CrewAI support (includes OpenAI/Anthropic integration):
 ```bash
 poetry install --extras crew
 ```
@@ -47,7 +47,7 @@ uv venv
 uv pip install -e .
 ```
 
-Optional CrewAI support:
+Optional CrewAI support (includes OpenAI/Anthropic integration):
 ```bash
 uv pip install -e ".[crew]"
 ```
@@ -72,6 +72,30 @@ python -m evaluation.harness --scenarios evaluation/scenarios --output evaluatio
 
 Scenarios support modes: `hybrid`, `crew`, `langgraph`. See `evaluation/scenarios/example.json`.
 
+## LLM Runtimes
+
+Supported runtimes: `ollama` (default), `anthropic`, `openai`.
+
+You can pass LLM config via API:
+```json
+{
+  "user_input": "Summarize and call tool.",
+  "llm": { "runtime": "ollama", "model": "llama3", "base_url": "http://localhost:11434" }
+}
+```
+
+You can also set LLM config per scenario in `evaluation/scenarios/*.json`:
+```json
+{
+  "llm": { "runtime": "openai", "model": "gpt-4o-mini" }
+}
+```
+
+### Runtime Notes
+- **Ollama**: set `base_url` to your Ollama host (e.g. `http://localhost:11434` or `http://host.docker.internal:11434` inside Docker).
+- **OpenAI**: set `OPENAI_API_KEY` in the environment.
+- **Anthropic**: set `ANTHROPIC_API_KEY` in the environment.
+
 ## Example Workflow
 
 `User request → planning node → CrewAI execution → tool call → validation node → final output`
@@ -95,6 +119,11 @@ See `evaluation/scenarios/example.json` for an example.
 ```bash
 cd docker
 docker compose up --build
+```
+
+Set provider keys in `docker/.env` (see `docker/.env.example`). For Ollama on your host, use:
+```
+OLLAMA_BASE_URL=http://host.docker.internal:11434
 ```
 
 ## Notes
