@@ -28,7 +28,10 @@ class CrewRunner:
     def _run_sync(self, input_text: str) -> CrewResult:
         try:
             from crewai import Agent, Crew, Process, Task
-            from crewai import LLM as CrewLLM
+            try:
+                from crewai import LLM as CrewLLM
+            except Exception:  # noqa: BLE001
+                from crewai.llm import LLM as CrewLLM
         except Exception as exc:  # noqa: BLE001
             return CrewResult(
                 output=f"CrewAI unavailable: {exc}. Input: {input_text}",
