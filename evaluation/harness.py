@@ -15,7 +15,7 @@ from evaluation.fault_injection import fault_from_dict
 from evaluation.metrics import compute_metrics, count_retries
 from orchestrator.graph import build_example_graph
 from orchestrator.state import GlobalState
-from tools.mcp_client import MCPClient
+from tools.mcp_client import MCPClient, MCPTransport
 from workers.crew.agents import CrewRunner
 from workers.crew.llm import LLMConfig
 from workers.crew.tasks import default_crew_config
@@ -29,6 +29,10 @@ class Scenario(BaseModel):
     mode: str = "hybrid"
     fault: dict[str, Any] | None = None
     llm: dict[str, Any] | None = None
+    mcp_transport: str = "http"
+    mcp_server_command: str | None = None
+    mcp_server_args: list[str] | None = None
+    mcp_fs_paths: list[str] | None = None
     tags: list[str] = Field(default_factory=list)
 
 
@@ -46,7 +50,14 @@ def load_scenarios(path: str | Path) -> list[Scenario]:
 async def run_scenario(scenario: Scenario) -> dict[str, Any]:
     fault = fault_from_dict(scenario.fault)
     llm_config = LLMConfig(**scenario.llm) if scenario.llm else LLMConfig()
-    client = MCPClient(base_url=scenario.mcp_base_url)
+    transport = MCPTransport(scenario.mcp_transport)
+    if transport == MCPTransport.STDIO:
+        paths = scenario.mcp_fs_paths or ["/app"]
+        args = scenario.mcp_server_args or ["-y", "@modelcontextprotocol/server-filesystem", *paths]
+        command = scenario.mcp_server_command or "npx"
+        client = MCPClient(transport=transport, command=command, args=args)
+    else:
+        client = MCPClient(transport=transport, base_url=scenario.mcp_base_url)
     crew_runner = CrewRunner(default_crew_config(), llm_config=llm_config)
     if scenario.mode == "hybrid":
         graph = build_example_graph(client, crew_runner, fault_config=fault)

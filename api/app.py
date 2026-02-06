@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from orchestrator.graph import build_example_graph
 from orchestrator.state import GlobalState
-from tools.mcp_client import FaultConfig, MCPClient
+from tools.mcp_client import FaultConfig, MCPClient, MCPTransport, stdio_server_from_env
 from workers.crew.agents import CrewRunner
 from workers.crew.llm import LLMConfig
 from workers.crew.tasks import default_crew_config
@@ -34,7 +34,17 @@ class RunResponse(BaseModel):
 @app.on_event("startup")
 async def startup() -> None:
     mcp_base_url = os.getenv("MCP_BASE_URL", "http://localhost:9000")
-    app.state.mcp_client = MCPClient(base_url=mcp_base_url)
+    transport = MCPTransport(os.getenv("MCP_TRANSPORT", MCPTransport.HTTP))
+    if transport == MCPTransport.STDIO:
+        command, args, env = stdio_server_from_env()
+        app.state.mcp_client = MCPClient(
+            transport=transport,
+            command=command,
+            args=args,
+            env=env,
+        )
+    else:
+        app.state.mcp_client = MCPClient(transport=transport, base_url=mcp_base_url)
     app.state.crew_runner = CrewRunner(default_crew_config())
 
 

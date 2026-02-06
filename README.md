@@ -52,7 +52,21 @@ Optional CrewAI support (includes OpenAI/Anthropic integration):
 uv pip install -e ".[crew]"
 ```
 
-## Run the MCP Server
+## MCP Server
+
+By default, the orchestrator can run the **Anthropic filesystem MCP server** via stdio (spawned with `npx`). This requires Node.js in the container and uses the filesystem tools (e.g., `list_files`).
+
+Configure via env:
+```
+MCP_TRANSPORT=stdio
+MCP_FS_PATHS=/app
+MCP_TOOL_NAME=list_files
+MCP_TOOL_PATH=/app
+```
+
+If you want the synthetic HTTP MCP server instead, set `MCP_TRANSPORT=http` and run the server below.
+
+## Run the Synthetic MCP Server
 
 ```bash
 uvicorn tools.synthetic_mcp_server.app:app --port 9000
@@ -146,6 +160,15 @@ The compose file mounts `evaluation/results` to your host. Run:
 cd docker
 docker compose up -d
 docker compose exec orchestrator python -m evaluation.harness --scenarios evaluation/scenarios --output evaluation/results --export-csv
+```
+
+### Telemetry Note
+CrewAI telemetry may attempt to register signal handlers; this fails when running inside worker threads. If you see
+`signal only works in main thread` errors, set these in `docker/.env`:
+```
+CREWAI_DISABLE_TELEMETRY=true
+CREWAI_DISABLE_TRACKING=true
+OTEL_SDK_DISABLED=true
 ```
 
 ## Notes
