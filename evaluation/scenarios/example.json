@@ -10,7 +10,7 @@
     },
     "llm": {
       "runtime": "ollama",
-      "model": "llama3"
+      "model": "llama3:8b"
     },
     "tags": ["baseline", "hybrid"]
   },
@@ -25,7 +25,7 @@
     },
     "llm": {
       "runtime": "ollama",
-      "model": "llama3"
+      "model": "llama3:8b"
     },
     "tags": ["baseline", "crew"]
   },
@@ -40,7 +40,7 @@
     },
     "llm": {
       "runtime": "ollama",
-      "model": "llama3"
+      "model": "llama3:8b"
     },
     "tags": ["baseline", "langgraph"]
   }
