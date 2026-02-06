@@ -73,7 +73,7 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
                     name="crew_exec",
                     crew_runner=crew_runner,
                     retry_policy=RetryPolicy(max_attempts=2),
-                    timeout_s=30.0,
+                    timeout_s=300.0,
                 ),
                 ValidationNode(
                     name="validator",
