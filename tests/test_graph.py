@@ -1,4 +1,4 @@
-import pytest
+import asyncio
 
 from orchestrator.graph import build_example_graph
 from orchestrator.state import GlobalState
@@ -20,12 +20,11 @@ class FakeCrewRunner(CrewRunner):
         return CrewResult(output=f"crew:{input_text}", metadata={"fake": True})
 
 
-@pytest.mark.asyncio
-async def test_graph_runs_successfully():
+def test_graph_runs_successfully():
     client = FakeMCPClient()
     crew_runner = FakeCrewRunner(default_crew_config())
     graph = build_example_graph(client, crew_runner)
     state = GlobalState(request_id="test", user_input="hello")
-    final_state = await graph.run(state)
+    final_state = asyncio.run(graph.run(state))
     assert final_state.final_output is not None
     assert final_state.errors == []

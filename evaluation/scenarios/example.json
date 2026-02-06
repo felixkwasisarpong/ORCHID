@@ -8,6 +8,10 @@
     "fault": {
       "mode": "success"
     },
+    "llm": {
+      "runtime": "ollama",
+      "model": "llama3"
+    },
     "tags": ["baseline", "hybrid"]
   },
   {
@@ -19,6 +23,10 @@
     "fault": {
       "mode": "success"
     },
+    "llm": {
+      "runtime": "ollama",
+      "model": "llama3"
+    },
     "tags": ["baseline", "crew"]
   },
   {
@@ -29,6 +37,10 @@
     "mcp_base_url": "http://localhost:9000",
     "fault": {
       "mode": "success"
+    },
+    "llm": {
+      "runtime": "ollama",
+      "model": "llama3"
     },
     "tags": ["baseline", "langgraph"]
   }

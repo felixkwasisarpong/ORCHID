@@ -1,5 +1,11 @@
 {
   "mcp_base_url": "http://localhost:9000",
+  "llm": {
+    "runtime": "ollama",
+    "model": "llama3",
+    "base_url": "http://localhost:11434",
+    "api_key_env": null
+  },
   "retry_policy": {
     "max_attempts": 2,
     "backoff_base_s": 0.5,

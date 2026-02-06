@@ -10,7 +10,9 @@ COPY evaluation /app/evaluation
 COPY observability /app/observability
 COPY api /app/api
 
-RUN pip install --no-cache-dir .
+
+RUN pip install --no-cache-dir ".[crew]"
+
 
 ENV PYTHONUNBUFFERED=1
 

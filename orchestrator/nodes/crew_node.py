@@ -44,6 +44,8 @@ class CrewNode(BaseNode):
                 "node": self.name,
                 "output_len": len(result.output),
                 "metadata": result.metadata,
+                "llm_runtime": result.metadata.get("llm_runtime"),
+                "llm_model": result.metadata.get("llm_model"),
             },
         )
         metadata = {**state.metadata, "crew": result.metadata}

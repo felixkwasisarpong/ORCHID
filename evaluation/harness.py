@@ -17,6 +17,7 @@ from orchestrator.graph import build_example_graph
 from orchestrator.state import GlobalState
 from tools.mcp_client import MCPClient
 from workers.crew.agents import CrewRunner
+from workers.crew.llm import LLMConfig
 from workers.crew.tasks import default_crew_config
 
 
@@ -27,6 +28,7 @@ class Scenario(BaseModel):
     mcp_base_url: str = "http://localhost:9000"
     mode: str = "hybrid"
     fault: dict[str, Any] | None = None
+    llm: dict[str, Any] | None = None
     tags: list[str] = Field(default_factory=list)
 
 
@@ -43,8 +45,9 @@ def load_scenarios(path: str | Path) -> list[Scenario]:
 
 async def run_scenario(scenario: Scenario) -> dict[str, Any]:
     fault = fault_from_dict(scenario.fault)
+    llm_config = LLMConfig(**scenario.llm) if scenario.llm else LLMConfig()
     client = MCPClient(base_url=scenario.mcp_base_url)
-    crew_runner = CrewRunner(default_crew_config())
+    crew_runner = CrewRunner(default_crew_config(), llm_config=llm_config)
     if scenario.mode == "hybrid":
         graph = build_example_graph(client, crew_runner, fault_config=fault)
     elif scenario.mode == "crew":
@@ -93,6 +96,9 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
         retries = count_retries(final_state.trace)
         tool_calls = 1 if final_state.tool_result else 0
         token_usage = final_state.metadata.get("token_usage", 0)
+        crew_meta = final_state.metadata.get("crew", {}) if isinstance(final_state.metadata, dict) else {}
+        llm_runtime = crew_meta.get("llm_runtime")
+        llm_model = crew_meta.get("llm_model")
         results.append(
             {
                 "request_id": request_id,
@@ -101,6 +107,8 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
                 "retries": retries,
                 "tool_calls": tool_calls,
                 "token_usage": token_usage,
+                "llm_runtime": llm_runtime,
+                "llm_model": llm_model,
                 "errors": final_state.errors,
             }
         )
@@ -138,6 +146,8 @@ def export_csv(json_path: str | Path, csv_path: str | Path) -> None:
         "retries",
         "tool_calls",
         "token_usage",
+        "llm_runtime",
+        "llm_model",
         "errors",
     ]
     with Path(csv_path).open("w", newline="", encoding="utf-8") as handle:

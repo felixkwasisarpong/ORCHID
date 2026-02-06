@@ -6,7 +6,7 @@ import random
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 
 from tools.mcp_client import FaultConfig, FaultMode, MCPRequest, MCPResponse
 
@@ -35,8 +35,8 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/tool")
-async def tool_call(request: MCPRequest) -> MCPResponse | PlainTextResponse:
+@app.post("/tool", response_model=None)
+async def tool_call(request: MCPRequest) -> Response:
     fault = request.fault or FaultConfig()
     mode = choose_mode(fault)
 
