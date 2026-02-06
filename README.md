@@ -126,6 +126,13 @@ Set provider keys in `docker/.env` (see `docker/.env.example`). For Ollama on yo
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 ```
 
+If you want Ollama in Docker, the compose file includes an `ollama` service. Pull a model:
+```bash
+cd docker
+docker compose up -d ollama
+docker compose exec ollama ollama pull llama3
+```
+
 ## Notes
 
 - Logging uses JSON lines for easy ingestion.
