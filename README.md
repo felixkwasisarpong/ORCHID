@@ -96,6 +96,13 @@ You can also set LLM config per scenario in `evaluation/scenarios/*.json`:
 - **OpenAI**: set `OPENAI_API_KEY` in the environment.
 - **Anthropic**: set `ANTHROPIC_API_KEY` in the environment.
 
+If you are running via Docker, rebuild after dependency changes:
+```bash
+cd docker
+docker compose build --no-cache
+docker compose up
+```
+
 ## Example Workflow
 
 `User request → planning node → CrewAI execution → tool call → validation node → final output`

@@ -82,7 +82,7 @@ def build_example_graph(
         name="crew_exec",
         crew_runner=crew_runner,
         retry_policy=RetryPolicy(max_attempts=2),
-        timeout_s=30.0,
+        timeout_s=300.0,
     )
     tool_node = ToolNode(
         name="tool_call",
