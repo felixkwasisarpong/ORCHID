@@ -11,6 +11,7 @@ from orchestrator.graph import build_example_graph
 from orchestrator.state import GlobalState
 from tools.mcp_client import FaultConfig, MCPClient
 from workers.crew.agents import CrewRunner
+from workers.crew.llm import LLMConfig
 from workers.crew.tasks import default_crew_config
 
 
@@ -20,6 +21,7 @@ app = FastAPI(title="ORCHID Orchestrator", version="0.1.0")
 class RunRequest(BaseModel):
     user_input: str
     fault: FaultConfig | None = None
+    llm: LLMConfig | None = None
 
 
 class RunResponse(BaseModel):
@@ -50,9 +52,12 @@ async def health() -> dict[str, str]:
 async def run(request: RunRequest) -> RunResponse:
     request_id = str(uuid.uuid4())
     state = GlobalState(request_id=request_id, user_input=request.user_input)
+    crew_runner = app.state.crew_runner
+    if request.llm is not None:
+        crew_runner = CrewRunner(default_crew_config(), llm_config=request.llm)
     graph = build_example_graph(
         app.state.mcp_client,
-        app.state.crew_runner,
+        crew_runner,
         fault_config=request.fault,
     )
     final_state = await graph.run(state)
