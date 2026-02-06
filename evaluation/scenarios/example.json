@@ -13,12 +13,14 @@
       "runtime": "ollama",
       "model": "llama3:8b"
     },
-    "tags": ["baseline", "hybrid", "filesystem"]
+    "tags": ["baseline", "hybrid", "filesystem"],
+    "force_tool": true,
+    "force_llm": true
   },
   {
     "name": "crew-only-baseline",
     "mode": "crew",
-    "user_input": "Summarize the request without calling tools.",
+    "user_input": "Summarize the request and call the filesystem tool.",
     "runs": 3,
     "mcp_transport": "stdio",
     "mcp_fs_paths": ["/app"],
@@ -29,12 +31,14 @@
       "runtime": "ollama",
       "model": "llama3:8b"
     },
-    "tags": ["baseline", "crew"]
+    "tags": ["baseline", "crew"],
+    "force_tool": true,
+    "force_llm": true
   },
   {
     "name": "langgraph-only-baseline",
     "mode": "langgraph",
-    "user_input": "Create a short plan and validate it.",
+    "user_input": "Summarize the request and call the filesystem tool.",
     "runs": 3,
     "mcp_transport": "stdio",
     "mcp_fs_paths": ["/app"],
@@ -45,6 +49,8 @@
       "runtime": "ollama",
       "model": "llama3:8b"
     },
-    "tags": ["baseline", "langgraph"]
+    "tags": ["baseline", "langgraph"],
+    "force_tool": true,
+    "force_llm": true
   }
 ]

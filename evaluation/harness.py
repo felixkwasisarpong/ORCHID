@@ -33,6 +33,8 @@ class Scenario(BaseModel):
     mcp_server_command: str | None = None
     mcp_server_args: list[str] | None = None
     mcp_fs_paths: list[str] | None = None
+    force_tool: bool = False
+    force_llm: bool = False
     tags: list[str] = Field(default_factory=list)
 
 
@@ -64,8 +66,12 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
     elif scenario.mode == "crew":
         from orchestrator.graph import Graph, PlanningNode, ValidationNode
         from orchestrator.nodes.crew_node import CrewNode
+        from orchestrator.nodes.llm_node import LLMNode
+        from orchestrator.nodes.tool_node import ToolNode
         from orchestrator.policies import FailureAction, FailurePolicy, RetryPolicy
+        from orchestrator.graph import resolve_tool_config
 
+        tool_name, payload_override = resolve_tool_config(client)
         graph = Graph(
             [
                 PlanningNode(name="planner", retry_policy=RetryPolicy(max_attempts=1)),
@@ -75,6 +81,21 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
                     retry_policy=RetryPolicy(max_attempts=2),
                     timeout_s=300.0,
                 ),
+                *(
+                    [
+                        ToolNode(
+                            name="tool_call",
+                            mcp_client=client,
+                            tool_name=tool_name,
+                            retry_policy=RetryPolicy(max_attempts=2),
+                            timeout_s=10.0,
+                            fault_config=fault,
+                            payload_override=payload_override,
+                        )
+                    ]
+                    if scenario.force_tool
+                    else []
+                ),
                 ValidationNode(
                     name="validator",
                     failure_policy=FailurePolicy(on_failure=FailureAction.CONTINUE),
@@ -83,16 +104,42 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
         )
     elif scenario.mode == "langgraph":
         from orchestrator.graph import Graph, PlanningNode, ValidationNode
+        from orchestrator.nodes.crew_node import CrewNode
+        from orchestrator.nodes.tool_node import ToolNode
         from orchestrator.policies import FailureAction, FailurePolicy, RetryPolicy
+        from orchestrator.graph import resolve_tool_config
 
+        tool_name, payload_override = resolve_tool_config(client)
+        nodes = [PlanningNode(name="planner", retry_policy=RetryPolicy(max_attempts=1))]
+        if scenario.force_llm:
+            nodes.append(
+                LLMNode(
+                    name="llm_exec",
+                    llm_config=llm_config,
+                    retry_policy=RetryPolicy(max_attempts=2),
+                    timeout_s=300.0,
+                )
+            )
+        if scenario.force_tool:
+            nodes.append(
+                ToolNode(
+                    name="tool_call",
+                    mcp_client=client,
+                    tool_name=tool_name,
+                    retry_policy=RetryPolicy(max_attempts=2),
+                    timeout_s=10.0,
+                    fault_config=fault,
+                    payload_override=payload_override,
+                )
+            )
+        nodes.append(
+            ValidationNode(
+                name="validator",
+                failure_policy=FailurePolicy(on_failure=FailureAction.CONTINUE),
+            )
+        )
         graph = Graph(
-            [
-                PlanningNode(name="planner", retry_policy=RetryPolicy(max_attempts=1)),
-                ValidationNode(
-                    name="validator",
-                    failure_policy=FailurePolicy(on_failure=FailureAction.CONTINUE),
-                ),
-            ]
+            nodes
         )
     else:
         raise ValueError(f"Unknown scenario mode: {scenario.mode}")
