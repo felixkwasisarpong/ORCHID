@@ -69,6 +69,10 @@ class BaseNode(ABC):
                 return result
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                if isinstance(exc, asyncio.TimeoutError):
+                    error_text = "timeout"
+                else:
+                    error_text = str(exc)
                 end_wall = now_utc()
                 duration_ms = (time.perf_counter() - start) * 1000.0
                 trace = TraceEvent(
@@ -78,7 +82,7 @@ class BaseNode(ABC):
                     start_time=start_wall,
                     end_time=end_wall,
                     duration_ms=duration_ms,
-                    error=str(exc),
+                    error=error_text,
                 )
                 state = state.add_trace(trace)
                 log_event(
@@ -93,7 +97,7 @@ class BaseNode(ABC):
                     request_id=state.request_id,
                     node=self.name,
                     attempt=attempt,
-                    error=str(exc),
+                    error=error_text,
                 )
                 if not self.retry_policy.should_retry(exc) or attempt >= attempts:
                     break

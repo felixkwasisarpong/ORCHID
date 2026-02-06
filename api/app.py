@@ -37,11 +37,13 @@ async def startup() -> None:
     transport = MCPTransport(os.getenv("MCP_TRANSPORT", MCPTransport.HTTP))
     if transport == MCPTransport.STDIO:
         command, args, env = stdio_server_from_env()
+        reuse = os.getenv("MCP_STDIO_REUSE_SESSION", "false").lower() in ("1", "true", "yes")
         app.state.mcp_client = MCPClient(
             transport=transport,
             command=command,
             args=args,
             env=env,
+            reuse_session=reuse,
         )
     else:
         app.state.mcp_client = MCPClient(transport=transport, base_url=mcp_base_url)

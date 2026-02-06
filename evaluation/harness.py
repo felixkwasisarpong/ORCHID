@@ -98,32 +98,34 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
         raise ValueError(f"Unknown scenario mode: {scenario.mode}")
 
     results: list[dict[str, Any]] = []
-    for _ in range(scenario.runs):
-        request_id = str(uuid.uuid4())
-        state = GlobalState(request_id=request_id, user_input=scenario.user_input)
-        start = time.perf_counter()
-        final_state = await graph.run(state)
-        latency_ms = (time.perf_counter() - start) * 1000.0
-        retries = count_retries(final_state.trace)
-        tool_calls = 1 if final_state.tool_result else 0
-        token_usage = final_state.metadata.get("token_usage", 0)
-        crew_meta = final_state.metadata.get("crew", {}) if isinstance(final_state.metadata, dict) else {}
-        llm_runtime = crew_meta.get("llm_runtime")
-        llm_model = crew_meta.get("llm_model")
-        results.append(
-            {
-                "request_id": request_id,
-                "success": len(final_state.errors) == 0,
-                "latency_ms": latency_ms,
-                "retries": retries,
-                "tool_calls": tool_calls,
-                "token_usage": token_usage,
-                "llm_runtime": llm_runtime,
-                "llm_model": llm_model,
-                "errors": final_state.errors,
-            }
-        )
-    await client.close()
+    try:
+        for _ in range(scenario.runs):
+            request_id = str(uuid.uuid4())
+            state = GlobalState(request_id=request_id, user_input=scenario.user_input)
+            start = time.perf_counter()
+            final_state = await graph.run(state)
+            latency_ms = (time.perf_counter() - start) * 1000.0
+            retries = count_retries(final_state.trace)
+            tool_calls = 1 if final_state.tool_result else 0
+            token_usage = final_state.metadata.get("token_usage", 0)
+            crew_meta = final_state.metadata.get("crew", {}) if isinstance(final_state.metadata, dict) else {}
+            llm_runtime = crew_meta.get("llm_runtime")
+            llm_model = crew_meta.get("llm_model")
+            results.append(
+                {
+                    "request_id": request_id,
+                    "success": len(final_state.errors) == 0,
+                    "latency_ms": latency_ms,
+                    "retries": retries,
+                    "tool_calls": tool_calls,
+                    "token_usage": token_usage,
+                    "llm_runtime": llm_runtime,
+                    "llm_model": llm_model,
+                    "errors": final_state.errors,
+                }
+            )
+    finally:
+        await client.close()
 
     summary = compute_metrics(results)
     return {"scenario": scenario.name, "results": results, "summary": summary}
