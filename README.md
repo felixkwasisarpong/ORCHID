@@ -140,6 +140,14 @@ docker compose up -d ollama
 docker compose exec ollama ollama pull llama3
 ```
 
+### Running Evaluations in Docker
+The compose file mounts `evaluation/results` to your host. Run:
+```bash
+cd docker
+docker compose up -d
+docker compose exec orchestrator python -m evaluation.harness --scenarios evaluation/scenarios --output evaluation/results --export-csv
+```
+
 ## Notes
 
 - Logging uses JSON lines for easy ingestion.

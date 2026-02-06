@@ -23,6 +23,8 @@ services:
       OLLAMA_BASE_URL: "http://ollama:11434"
     env_file:
       - .env
+    volumes:
+      - ../evaluation/results:/app/evaluation/results
     ports:
       - "8000:8000"
     depends_on:
