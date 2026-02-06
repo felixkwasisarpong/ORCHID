@@ -1,0 +1,35 @@
+[
+  {
+    "name": "hybrid-baseline",
+    "mode": "hybrid",
+    "user_input": "Summarize the request and call the synthetic tool.",
+    "runs": 3,
+    "mcp_base_url": "http://localhost:9000",
+    "fault": {
+      "mode": "success"
+    },
+    "tags": ["baseline", "hybrid"]
+  },
+  {
+    "name": "crew-only-baseline",
+    "mode": "crew",
+    "user_input": "Summarize the request without calling tools.",
+    "runs": 3,
+    "mcp_base_url": "http://localhost:9000",
+    "fault": {
+      "mode": "success"
+    },
+    "tags": ["baseline", "crew"]
+  },
+  {
+    "name": "langgraph-only-baseline",
+    "mode": "langgraph",
+    "user_input": "Create a short plan and validate it.",
+    "runs": 3,
+    "mcp_base_url": "http://localhost:9000",
+    "fault": {
+      "mode": "success"
+    },
+    "tags": ["baseline", "langgraph"]
+  }
+]
