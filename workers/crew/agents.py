@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -18,17 +19,30 @@ class CrewResult(BaseModel):
 class CrewRunner:
     """Async wrapper around CrewAI execution."""
 
-    def __init__(self, config: CrewConfig, llm_config: LLMConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: CrewConfig,
+        llm_config: LLMConfig | None = None,
+        disable_telemetry: bool = True,
+    ) -> None:
         self.config = config
         self.llm_config = llm_config or LLMConfig()
+        self.disable_telemetry = disable_telemetry
 
     async def run(self, input_text: str) -> CrewResult:
         return await asyncio.to_thread(self._run_sync, input_text)
 
     def _run_sync(self, input_text: str) -> CrewResult:
+        if self.disable_telemetry:
+            os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
+            os.environ.setdefault("CREWAI_DISABLE_TRACKING", "true")
+            os.environ.setdefault("OTEL_SDK_DISABLED", "true")
         try:
             from crewai import Agent, Crew, Process, Task
-            from crewai import LLM as CrewLLM
+            try:
+                from crewai import LLM as CrewLLM
+            except Exception:  # noqa: BLE001
+                from crewai.llm import LLM as CrewLLM
         except Exception as exc:  # noqa: BLE001
             return CrewResult(
                 output=f"CrewAI unavailable: {exc}. Input: {input_text}",

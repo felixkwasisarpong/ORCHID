@@ -1,6 +1,8 @@
 """Graph-based orchestrator implementation."""
 from __future__ import annotations
 
+import json
+import os
 from typing import Iterable
 
 from observability.logger import get_logger, log_event
@@ -9,7 +11,7 @@ from orchestrator.nodes.crew_node import CrewNode
 from orchestrator.nodes.tool_node import ToolNode
 from orchestrator.policies import FailureAction, FailurePolicy, RetryPolicy
 from orchestrator.state import GlobalState
-from tools.mcp_client import MCPClient, FaultConfig
+from tools.mcp_client import MCPClient, FaultConfig, MCPTransport
 from workers.crew.agents import CrewRunner
 
 
@@ -74,6 +76,20 @@ def build_example_graph(
     fault_config: FaultConfig | None = None,
 ) -> Graph:
     """Example workflow: plan -> crew -> tool -> validate."""
+    tool_name = os.getenv("MCP_TOOL_NAME")
+    transport = getattr(mcp_client, "transport", MCPTransport.HTTP)
+    if tool_name is None:
+        tool_name = "synthetic_tool" if transport == MCPTransport.HTTP else "list_files"
+    payload_override = None
+    tool_args_json = os.getenv("MCP_TOOL_ARGS_JSON")
+    if tool_args_json:
+        try:
+            payload_override = json.loads(tool_args_json)
+        except json.JSONDecodeError:
+            payload_override = None
+    elif tool_name == "list_files":
+        payload_override = {"path": os.getenv("MCP_TOOL_PATH", ".")}
+
     plan_node = PlanningNode(
         name="planner",
         retry_policy=RetryPolicy(max_attempts=1),
@@ -82,15 +98,16 @@ def build_example_graph(
         name="crew_exec",
         crew_runner=crew_runner,
         retry_policy=RetryPolicy(max_attempts=2),
-        timeout_s=30.0,
+        timeout_s=300.0,
     )
     tool_node = ToolNode(
         name="tool_call",
         mcp_client=mcp_client,
-        tool_name="synthetic_tool",
+        tool_name=tool_name,
         retry_policy=RetryPolicy(max_attempts=2),
         timeout_s=10.0,
         fault_config=fault_config,
+        payload_override=payload_override,
     )
     validation_node = ValidationNode(
         name="validator",

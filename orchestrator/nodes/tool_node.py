@@ -21,17 +21,23 @@ class ToolNode(BaseNode):
         fault_config: FaultConfig | None = None,
         **kwargs: Any,
     ) -> None:
+        payload_override = kwargs.pop("payload_override", None)
         super().__init__(name=name, **kwargs)
         self.mcp_client = mcp_client
         self.tool_name = tool_name
         self.input_field = input_field
         self.output_field = output_field
         self.fault_config = fault_config
+        self.payload_override = payload_override
 
     async def run(self, state: GlobalState) -> GlobalState:
-        payload = getattr(state, self.input_field)
-        if payload is None:
-            return state.add_error(f"{self.name} missing input '{self.input_field}'")
+        if self.payload_override is not None:
+            tool_payload = self.payload_override
+        else:
+            payload = getattr(state, self.input_field)
+            if payload is None:
+                return state.add_error(f"{self.name} missing input '{self.input_field}'")
+            tool_payload = {"text": payload}
         self.logger.info(
             "tool_request",
             extra={
@@ -42,7 +48,7 @@ class ToolNode(BaseNode):
         )
         response: MCPResponse = await self.mcp_client.call_tool(
             tool_name=self.tool_name,
-            payload={"text": payload},
+            payload=tool_payload,
             request_id=state.request_id,
             fault=self.fault_config,
         )

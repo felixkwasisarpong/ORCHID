@@ -52,7 +52,21 @@ Optional CrewAI support (includes OpenAI/Anthropic integration):
 uv pip install -e ".[crew]"
 ```
 
-## Run the MCP Server
+## MCP Server
+
+By default, the orchestrator can run the **Anthropic filesystem MCP server** via stdio (spawned with `npx`). This requires Node.js in the container and uses the filesystem tools (e.g., `list_files`).
+
+Configure via env:
+```
+MCP_TRANSPORT=stdio
+MCP_FS_PATHS=/app
+MCP_TOOL_NAME=list_files
+MCP_TOOL_PATH=/app
+```
+
+If you want the synthetic HTTP MCP server instead, set `MCP_TRANSPORT=http` and run the server below.
+
+## Run the Synthetic MCP Server
 
 ```bash
 uvicorn tools.synthetic_mcp_server.app:app --port 9000
@@ -96,6 +110,13 @@ You can also set LLM config per scenario in `evaluation/scenarios/*.json`:
 - **OpenAI**: set `OPENAI_API_KEY` in the environment.
 - **Anthropic**: set `ANTHROPIC_API_KEY` in the environment.
 
+If you are running via Docker, rebuild after dependency changes:
+```bash
+cd docker
+docker compose build --no-cache
+docker compose up
+```
+
 ## Example Workflow
 
 `User request → planning node → CrewAI execution → tool call → validation node → final output`
@@ -124,6 +145,30 @@ docker compose up --build
 Set provider keys in `docker/.env` (see `docker/.env.example`). For Ollama on your host, use:
 ```
 OLLAMA_BASE_URL=http://host.docker.internal:11434
+```
+
+If you want Ollama in Docker, the compose file includes an `ollama` service. Pull a model:
+```bash
+cd docker
+docker compose up -d ollama
+docker compose exec ollama ollama pull llama3
+```
+
+### Running Evaluations in Docker
+The compose file mounts `evaluation/results` to your host. Run:
+```bash
+cd docker
+docker compose up -d
+docker compose exec orchestrator python -m evaluation.harness --scenarios evaluation/scenarios --output evaluation/results --export-csv
+```
+
+### Telemetry Note
+CrewAI telemetry may attempt to register signal handlers; this fails when running inside worker threads. If you see
+`signal only works in main thread` errors, set these in `docker/.env`:
+```
+CREWAI_DISABLE_TELEMETRY=true
+CREWAI_DISABLE_TRACKING=true
+OTEL_SDK_DISABLED=true
 ```
 
 ## Notes
