@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -38,6 +39,14 @@ class ExperimentConfig:
     faults: FaultConfig = field(default_factory=FaultConfig)
 
 
+def _expand_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, list):
+        return [os.path.expandvars(item) if isinstance(item, str) else item for item in value]
+    return value
+
+
 def load_config(path: Optional[Path]) -> ExperimentConfig:
     config = ExperimentConfig()
     if path is None:
@@ -48,8 +57,8 @@ def load_config(path: Optional[Path]) -> ExperimentConfig:
         if key == "faults" and isinstance(value, dict):
             for f_key, f_value in value.items():
                 if hasattr(config.faults, f_key):
-                    setattr(config.faults, f_key, f_value)
+                    setattr(config.faults, f_key, _expand_value(f_value))
             continue
         if hasattr(config, key):
-            setattr(config, key, value)
+            setattr(config, key, _expand_value(value))
     return config

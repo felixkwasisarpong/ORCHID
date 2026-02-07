@@ -65,6 +65,29 @@ python scripts/smoke_test.py
 python -m scripts.smoke_test
 ```
 
+## Run Harness in Docker
+
+If you want the harness to run inside Docker while still spawning the MCP filesystem container, you must:
+- mount the Docker socket
+- mount the repo at the same absolute path
+- pass `HOST_PWD` so the config uses host paths for bind mounts
+
+Build and run:
+```bash
+docker build -f docker/Dockerfile -t orchid-harness .
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v \"$(pwd):$(pwd)\" -w \"$(pwd)\" \
+  -e HOST_PWD=\"$(pwd)\" \
+  orchid-harness \
+  python -m harness.run_experiments --config configs/smoke.docker.yaml
+```
+
+Docker Compose (run from repo root):
+```bash
+docker compose -f docker/compose.harness.yml up --build
+```
+
 ## Traces and Summary
 
 - JSONL traces: `evaluation/results/traces/` (one file per run)
@@ -75,6 +98,7 @@ Each trace includes consistent counters (`llm_calls`, `tool_calls`, `retries`, `
 ## Configuration Notes
 
 - Edit `configs/default.yaml` to change models, max steps, retries, or fault injection.
+- Config values support environment variable expansion (e.g., `${HOST_PWD}`).
 - For streaming MCP transport, set:
   - `transport: http`
   - `http_url: http://127.0.0.1:8080` (or your gateway address)
