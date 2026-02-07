@@ -61,6 +61,8 @@ Runs 1 task with each orchestrator using Ollama and filesystem tools.
 
 ```bash
 python scripts/smoke_test.py
+# or module form:
+python -m scripts.smoke_test
 ```
 
 ## Traces and Summary
