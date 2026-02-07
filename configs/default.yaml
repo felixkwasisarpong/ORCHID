@@ -17,6 +17,16 @@ tool_timeout_s: 10.0
 results_dir: evaluation/results
 sandbox_dir: evaluation/sandboxes
 transport: stdio
+# Example for stdio with Docker MCP Tools filesystem server:
+# gateway_cmd:
+#   - docker
+#   - run
+#   - -i
+#   - --rm
+#   - -v
+#   - "{sandbox_root}:/local-directory"
+#   - mcp/filesystem
+#   - /local-directory
 runtime_models:
   ollama: llama3.1
   openai: gpt-4.1-mini

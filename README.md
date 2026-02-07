@@ -78,6 +78,8 @@ Each trace includes consistent counters (`llm_calls`, `tool_calls`, `retries`, `
   - `http_url: http://127.0.0.1:8080` (or your gateway address)
 - For stdio transport with explicit filesystem root, set:
   - `gateway_cmd: ["docker", "mcp", "gateway", "run", "--server", "filesystem", "--root", "{sandbox_root}"]`
+- For Docker MCP Tools filesystem server (direct container), use:
+  - `gateway_cmd: ["docker", "run", "-i", "--rm", "-v", "{sandbox_root}:/local-directory", "mcp/filesystem", "/local-directory"]`
 - If your filesystem tool names differ from the defaults, update `benchmarks/tasks.py`.
 
 ## Fault Injection
