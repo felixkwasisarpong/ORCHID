@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import csv
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 from typing import Dict, List
@@ -112,6 +113,8 @@ async def run_once(
     run_id = f"{task_id}-{orchestrator_name}-{runtime_name}-{uuid4().hex[:8]}"
     sandbox_root = Path(config.sandbox_dir) / run_id
     sandbox_root.mkdir(parents=True, exist_ok=True)
+    started_at = datetime.now(timezone.utc).isoformat()
+    started_perf = time.perf_counter()
 
     task_def.setup(sandbox_root)
     apply_faults(sandbox_root, config.faults)
@@ -139,26 +142,44 @@ async def run_once(
 
     trace_path = default_trace_path(results_dir, run_id)
     logger = JSONLLogger(trace_path)
+    fault_config = {
+        "permission_path": config.faults.permission_path,
+        "missing_path": config.faults.missing_path,
+        "latency_ms": config.faults.latency_ms,
+        "jitter_ms": config.faults.jitter_ms,
+        "tool_timeout_s": episode_config.tool_timeout_s,
+    }
 
-    async with MCPGatewayClient(mcp_config) as tool_client:
-        orchestrator = build_orchestrator(
-            orchestrator_name,
-            runtime,
-            tool_client,
-            task_def.validate,
-            episode_config,
+    try:
+        async with MCPGatewayClient(mcp_config) as tool_client:
+            orchestrator = build_orchestrator(
+                orchestrator_name,
+                runtime,
+                tool_client,
+                task_def.validate,
+                episode_config,
+            )
+            trace = await orchestrator.run(task_def.spec, sandbox_root, seed, run_id, runtime_name)
+        trace = trace.model_copy(update={"fault_config": fault_config})
+    except Exception as exc:  # noqa: BLE001
+        ended_perf = time.perf_counter()
+        trace = RunTrace(
+            run_id=run_id,
+            orchestrator=orchestrator_name,
+            runtime=runtime_name,
+            task_id=task_id,
+            seed=seed,
+            started_at=started_at,
+            ended_at=datetime.now(timezone.utc).isoformat(),
+            total_latency_ms=(ended_perf - started_perf) * 1000.0,
+            llm_calls=0,
+            tool_calls=0,
+            retries=0,
+            steps=[],
+            success=False,
+            error=f"{type(exc).__name__}: {exc}",
+            fault_config=fault_config,
         )
-        trace = await orchestrator.run(task_def.spec, sandbox_root, seed, run_id, runtime_name)
-
-    trace = trace.model_copy(update={
-        "fault_config": {
-            "permission_path": config.faults.permission_path,
-            "missing_path": config.faults.missing_path,
-            "latency_ms": config.faults.latency_ms,
-            "jitter_ms": config.faults.jitter_ms,
-            "tool_timeout_s": episode_config.tool_timeout_s,
-        }
-    })
 
     logger.log_trace(trace)
     return trace
