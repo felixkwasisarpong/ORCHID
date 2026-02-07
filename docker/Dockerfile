@@ -4,6 +4,10 @@ WORKDIR /app
 
 COPY pyproject.toml README.md /app/
 COPY orchestrator /app/orchestrator
+COPY orchestrators /app/orchestrators
+COPY runtimes /app/runtimes
+COPY benchmarks /app/benchmarks
+COPY harness /app/harness
 COPY workers /app/workers
 COPY tools /app/tools
 COPY evaluation /app/evaluation

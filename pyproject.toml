@@ -6,6 +6,10 @@ authors = ["ORCHID Contributors"]
 readme = "README.md"
 packages = [
   { include = "orchestrator" },
+  { include = "orchestrators" },
+  { include = "runtimes" },
+  { include = "benchmarks" },
+  { include = "harness" },
   { include = "workers" },
   { include = "tools" },
   { include = "evaluation" },
@@ -20,6 +24,9 @@ uvicorn = { version = "^0.31.1", extras = ["standard"] }
 pydantic = { version = "^2.7.0", extras = ["email"] }
 httpx = "^0.27.0"
 mcp = "^1.23.2"
+jsonschema = "^4.23.0"
+pyyaml = "^6.0.2"
+temporalio = "^1.8.0"
 crewai = { version = "^1.9.3", optional = true }
 litellm = { version = "^1.40.0", optional = true }
 langchain-ollama = { version = "^0.2.0", optional = true }

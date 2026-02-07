@@ -21,6 +21,7 @@ class LLMConfig(BaseModel):
     api_key_env: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    seed: int | None = None
 
 
 DEFAULT_BASE_URL: dict[LLMRuntime, str | None] = {
@@ -67,4 +68,6 @@ def build_llm_config_payload(config: LLMConfig) -> dict[str, Any]:
         payload["temperature"] = config.temperature
     if config.max_tokens is not None:
         payload["max_tokens"] = config.max_tokens
+    if config.seed is not None:
+        payload["seed"] = config.seed
     return payload
