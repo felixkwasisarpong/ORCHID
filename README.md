@@ -92,6 +92,19 @@ Supported in the harness via config or CLI:
 - Latency/jitter: `--fault-latency-ms 250 --fault-jitter-ms 50`
 - Tool timeout: `--fault-timeout-s 5`
 
+## MCP Stdio Client (Minimal Adapter)
+
+Requirements:
+- Docker installed and running
+- MCP Gateway available (`docker mcp gateway run`)
+
+Smoke test:
+```bash
+python example/smoke_test.py
+```
+
+The client writes JSONL call traces to `logs/mcp_calls.jsonl`.
+
 ## Repository Layout
 
 - `orchestrators/` LangGraph, CrewAI, AutoGen engines
