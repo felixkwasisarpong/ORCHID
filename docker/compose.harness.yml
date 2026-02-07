@@ -9,6 +9,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - HOST_PWD=${PWD}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
+    extra_hosts:
+      - host.docker.internal:host-gateway
     command: ["python", "-m", "harness.run_experiments", "--config", "configs/smoke.docker.yaml"]

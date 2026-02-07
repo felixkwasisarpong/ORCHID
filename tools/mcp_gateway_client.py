@@ -109,6 +109,7 @@ class MCPGatewayClient:
             {
                 "protocolVersion": "2024-11-05",
                 "clientInfo": {"name": "orchid", "version": "0.1"},
+                "capabilities": {},
             },
         )
 

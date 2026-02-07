@@ -83,6 +83,11 @@ docker run --rm -it \
   python -m harness.run_experiments --config configs/smoke.docker.yaml
 ```
 
+If Ollama runs on the host machine, add:
+```bash
+-e OLLAMA_BASE_URL="http://host.docker.internal:11434"
+```
+
 Docker Compose (run from repo root):
 ```bash
 docker compose -f docker/compose.harness.yml up --build
