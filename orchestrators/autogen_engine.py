@@ -21,9 +21,14 @@ from runtimes.base import RuntimeClient
 from tools.mcp_gateway_client import MCPGatewayClient
 
 try:
-    import autogen
+    from autogen_agentchat.messages import TextMessage
 except Exception:  # noqa: BLE001
-    autogen = None
+    TextMessage = None
+
+try:
+    import autogen as autogen_legacy
+except Exception:  # noqa: BLE001
+    autogen_legacy = None
 
 
 class AutoGenMetrics:
@@ -38,22 +43,18 @@ class RuntimeConversableAgent:  # lightweight wrapper around AutoGen if availabl
         self.runtime = runtime
         self.seed = seed
         self.metrics = metrics
-        if autogen is not None:
-            self.agent = autogen.ConversableAgent(
-                name=name,
-                system_message=f"You are {name}.",
-                llm_config=False,
-                human_input_mode="NEVER",
-            )
-        else:
-            self.agent = None
+        self.transcript: list[object] = []
 
-    def generate(self, prompt: str) -> str:
+    async def generate(self, prompt: str) -> str:
+        if TextMessage is not None:
+            self.transcript.append(TextMessage(content=prompt, source="user"))
         start = time.perf_counter()
-        result = asyncio.run(self.runtime.chat([{"role": "user", "content": prompt}], seed=self.seed))
+        result = await self.runtime.chat([{"role": "user", "content": prompt}], seed=self.seed)
         end = time.perf_counter()
         self.metrics.llm_calls += 1
         self.metrics.total_latency_ms += (end - start) * 1000
+        if TextMessage is not None:
+            self.transcript.append(TextMessage(content=result, source=self.name))
         return result
 
 
@@ -67,8 +68,10 @@ class AutoGenEngine:
     async def run(
         self, task: TaskSpec, sandbox_root: Path, seed: int, run_id: str, runtime_name: str
     ) -> RunTrace:
-        if autogen is None:
-            raise RuntimeError("autogen is not installed. Install pyautogen to use this orchestrator.")
+        if TextMessage is None and autogen_legacy is None:
+            raise RuntimeError(
+                "AutoGen is not installed. Install pyautogen/autogen-agentchat to use this orchestrator."
+            )
 
         started_at = datetime.now(timezone.utc).isoformat()
         start_ts = time.perf_counter()
@@ -90,9 +93,9 @@ class AutoGenEngine:
             planner = RuntimeConversableAgent("planner", self.runtime, seed, metrics)
             critic = RuntimeConversableAgent("critic", self.runtime, seed, metrics)
 
-            planner_output = planner.generate(prompt_text)
+            planner_output = await planner.generate(prompt_text)
             critic_prompt = f"{prompt_text}\n\nPlanner output:\n{planner_output}\n\nReturn corrected StepAction JSON only."
-            critic_output = critic.generate(critic_prompt)
+            critic_output = await critic.generate(critic_prompt)
 
             llm_calls += metrics.llm_calls
             llm_latency_ms = metrics.total_latency_ms

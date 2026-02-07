@@ -10,6 +10,11 @@ services:
     environment:
       - HOST_PWD=${PWD}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_API_BASE=http://host.docker.internal:11434
+      - CREWAI_TRACING_ENABLED=false
+      - CREWAI_DISABLE_TELEMETRY=true
+      - CREWAI_TESTING=true
+      - LITELLM_LOG=CRITICAL
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
     extra_hosts:
