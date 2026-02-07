@@ -201,6 +201,12 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
@@ -208,6 +214,7 @@ __marimo__/
 
 # Evaluation outputs
 evaluation/results/
+evaluation/sandboxes/
 
 
 key
