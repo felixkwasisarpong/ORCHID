@@ -104,7 +104,7 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
         )
     elif scenario.mode == "langgraph":
         from orchestrator.graph import Graph, PlanningNode, ValidationNode
-        from orchestrator.nodes.crew_node import CrewNode
+        from orchestrator.nodes.llm_node import LLMNode
         from orchestrator.nodes.tool_node import ToolNode
         from orchestrator.policies import FailureAction, FailurePolicy, RetryPolicy
         from orchestrator.graph import resolve_tool_config
