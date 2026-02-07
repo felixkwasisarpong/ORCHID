@@ -155,9 +155,11 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
             retries = count_retries(final_state.trace)
             tool_calls = 1 if final_state.tool_result else 0
             token_usage = final_state.metadata.get("token_usage", 0)
-            crew_meta = final_state.metadata.get("crew", {}) if isinstance(final_state.metadata, dict) else {}
-            llm_runtime = crew_meta.get("llm_runtime")
-            llm_model = crew_meta.get("llm_model")
+        metadata = final_state.metadata if isinstance(final_state.metadata, dict) else {}
+        crew_meta = metadata.get("crew", {})
+        llm_meta = metadata.get("llm", {})
+        llm_runtime = crew_meta.get("llm_runtime") or llm_meta.get("runtime")
+        llm_model = crew_meta.get("llm_model") or llm_meta.get("model")
             results.append(
                 {
                     "request_id": request_id,
