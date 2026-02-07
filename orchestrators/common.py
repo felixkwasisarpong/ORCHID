@@ -75,6 +75,8 @@ Rules:
 - If more tool work is needed, choose action_type=tool_call.
 - If you believe the goal is satisfied, choose action_type=finalize and explain briefly in final_answer.
 - Use only allowed tool names.
+- Before write operations, ensure parent directories exist.
+- Unless explicitly requested, write plain text outputs (not JSON wrappers).
 - Output JSON only, no extra text.
 """.strip()
 

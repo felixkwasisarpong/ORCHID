@@ -14,4 +14,6 @@ services:
       - ANTHROPIC_API_KEY
     extra_hosts:
       - host.docker.internal:host-gateway
-    command: ["python", "-m", "harness.run_experiments", "--config", "configs/smoke.docker.yaml"]
+    stdin_open: true
+    tty: true
+    command: ["sleep", "infinity"]

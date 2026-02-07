@@ -117,6 +117,8 @@ async def run_once(
     started_perf = time.perf_counter()
 
     task_def.setup(sandbox_root)
+    # Keep output writes deterministic across tasks by ensuring output root exists.
+    (sandbox_root / "output").mkdir(parents=True, exist_ok=True)
     apply_faults(sandbox_root, config.faults)
 
     episode_config = EpisodeConfig(
