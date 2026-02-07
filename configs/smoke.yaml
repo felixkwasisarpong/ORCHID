@@ -1,0 +1,30 @@
+orchestrator: langgraph
+runtime:
+  runtime: ollama
+  model: llama3
+  base_url: http://localhost:11434
+  temperature: 0.0
+  max_tokens: 256
+episode:
+  max_steps: 4
+  max_llm_retries: 1
+  max_tool_retries: 1
+  tool_timeout_s: 10.0
+runs: 1
+seeds: [42]
+tasks: [create_hello]
+sandbox_root: evaluation/sandboxes
+output_dir: evaluation/results
+mcp:
+  transport: stdio
+  reuse_session: true
+faults:
+  latency_ms: 0
+  jitter_ms: 0
+  timeout_s: null
+temporal:
+  address: localhost:7233
+  namespace: default
+  task_queue: orchid-task-queue
+  workflow_timeout_s: 300
+  activity_timeout_s: 60

@@ -70,16 +70,12 @@ class ValidationNode(BaseNode):
         )
 
 
-def build_example_graph(
-    mcp_client: MCPClient,
-    crew_runner: CrewRunner,
-    fault_config: FaultConfig | None = None,
-) -> Graph:
-    """Example workflow: plan -> crew -> tool -> validate."""
+def resolve_tool_config(mcp_client: MCPClient) -> tuple[str, dict[str, object] | None]:
+    """Resolve MCP tool name and payload overrides based on env + transport."""
     tool_name = os.getenv("MCP_TOOL_NAME")
     transport = getattr(mcp_client, "transport", MCPTransport.HTTP)
     if tool_name is None:
-        tool_name = "synthetic_tool" if transport == MCPTransport.HTTP else "list_files"
+        tool_name = "synthetic_tool" if transport == MCPTransport.HTTP else "list_directory"
     payload_override = None
     tool_args_json = os.getenv("MCP_TOOL_ARGS_JSON")
     if tool_args_json:
@@ -87,8 +83,18 @@ def build_example_graph(
             payload_override = json.loads(tool_args_json)
         except json.JSONDecodeError:
             payload_override = None
-    elif tool_name == "list_files":
+    elif tool_name in {"list_files", "list_directory"}:
         payload_override = {"path": os.getenv("MCP_TOOL_PATH", ".")}
+    return tool_name, payload_override
+
+
+def build_example_graph(
+    mcp_client: MCPClient,
+    crew_runner: CrewRunner,
+    fault_config: FaultConfig | None = None,
+) -> Graph:
+    """Example workflow: plan -> crew -> tool -> validate."""
+    tool_name, payload_override = resolve_tool_config(mcp_client)
 
     plan_node = PlanningNode(
         name="planner",

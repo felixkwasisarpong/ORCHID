@@ -1,42 +1,39 @@
 # ORCHID
-Research-grade scaffold for hybrid agent orchestration combining a graph control plane, CrewAI worker plane, and MCP tool plane.
+Research-grade prototype for comparing three orchestrators over the same tool-calling workload.
+
+**Orchestrators**
+- LangGraph-style (in-process state machine)
+- CrewAI (role/task multi-agent, in-process)
+- Temporal (durable workflows, replay-safe activities)
+
+**LLM runtimes**
+- Ollama (local)
+- OpenAI (cloud)
+- Anthropic (cloud)
 
 **What this is**
-- Modular architecture for experimentation, benchmarking, and instrumentation
-- Minimal yet extensible implementation with strong typing and traceability
+- Minimal but extensible benchmark harness with shared schemas and traces
+- Deterministic prompts, caps, and tool schemas across orchestrators
 
 **What this is not**
-- Production hardening, security, or full feature coverage
+- Production hardening or complete feature coverage
 
 ## Architecture
+- `orchestrators/` Engines for LangGraph, CrewAI, Temporal
+- `runtimes/` LLM runtime clients (Ollama/OpenAI/Anthropic)
+- `tools/mcp_gateway_client.py` MCP Gateway client (stdio by default, Streamable HTTP optional)
+- `benchmarks/` 12 filesystem tasks + validators
+- `harness/` Experiment runner + smoke test
+- `observability/` JSONL traces and schemas
+- `docker/` Dockerfiles + Temporal compose
 
-- **Control plane**: `orchestrator/` implements a minimal LangGraph-style sequential graph.
-- **Worker plane**: `workers/crew/` wraps CrewAI teams with structured input/output.
-- **Tool plane**: `tools/` provides an MCP client and a synthetic MCP server with fault injection.
-- **Observability**: `observability/` offers JSON logging, trace export, and replay helpers.
-- **Evaluation**: `evaluation/` runs scenarios with fault injection and metrics.
-- **API**: `api/` exposes orchestration as a FastAPI service.
-
-## Repository Layout
-
-- `orchestrator/graph.py` Graph orchestrator + example workflow
-- `orchestrator/nodes/` BaseNode, CrewNode, ToolNode
-- `workers/crew/` CrewAI config and runner
-- `tools/mcp_client.py` MCP client adapter
-- `tools/synthetic_mcp_server/` Fault-injecting MCP server
-- `evaluation/` Experiment harness + scenarios
-- `observability/` Logging + trace utilities + replay
-- `api/app.py` Orchestration API
-- `docker/` Dockerfile and docker-compose
 
 ## Install
-
 ### Poetry
 ```bash
 poetry install
 ```
-
-Optional CrewAI support (includes OpenAI/Anthropic integration):
+Optional CrewAI support:
 ```bash
 poetry install --extras crew
 ```
@@ -46,133 +43,79 @@ poetry install --extras crew
 uv venv
 uv pip install -e .
 ```
-
-Optional CrewAI support (includes OpenAI/Anthropic integration):
+Optional CrewAI support:
 ```bash
 uv pip install -e ".[crew]"
 ```
 
-## MCP Server
-
-By default, the orchestrator can run the **Anthropic filesystem MCP server** via stdio (spawned with `npx`). This requires Node.js in the container and uses the filesystem tools (e.g., `list_files`).
-
-Configure via env:
-```
-MCP_TRANSPORT=stdio
-MCP_FS_PATHS=/app
-MCP_TOOL_NAME=list_files
-MCP_TOOL_PATH=/app
-```
-
-If you want the synthetic HTTP MCP server instead, set `MCP_TRANSPORT=http` and run the server below.
-
-## Run the Synthetic MCP Server
+## MCP Gateway (Filesystem Tools)
+The default transport is **stdio**, spawning the Docker MCP Gateway:
 
 ```bash
-uvicorn tools.synthetic_mcp_server.app:app --port 9000
+export MCP_GATEWAY_ALLOWED_PATHS="/absolute/path/to/ORCHID/evaluation/sandboxes"
+docker mcp gateway run
 ```
 
-## Run the Orchestrator API
+The harness defaults to `stdio` with `docker mcp gateway run`. To override, edit `configs/experiment.yaml` or set:
+- `MCP_GATEWAY_COMMAND`
+- `MCP_GATEWAY_ARGS`
 
-```bash
-MCP_BASE_URL=http://localhost:9000 uvicorn api.app:app --port 8000
+For Streamable HTTP, set in config:
+```yaml
+mcp:
+  transport: streamable_http
+  base_url: http://localhost:8085
 ```
 
-## Run an Experiment
-
-```bash
-python -m evaluation.harness --scenarios evaluation/scenarios --output evaluation/results --export-csv
-```
-
-Scenarios support modes: `hybrid`, `crew`, `langgraph`. See `evaluation/scenarios/example.json`.
-
-## LLM Runtimes
-
-Supported runtimes: `ollama` (default), `anthropic`, `openai`.
-
-You can pass LLM config via API:
-```json
-{
-  "user_input": "Summarize and call tool.",
-  "llm": { "runtime": "ollama", "model": "llama3", "base_url": "http://localhost:11434" }
-}
-```
-
-You can also set LLM config per scenario in `evaluation/scenarios/*.json`:
-```json
-{
-  "llm": { "runtime": "openai", "model": "gpt-4o-mini" }
-}
-```
-
-### Runtime Notes
-- **Ollama**: set `base_url` to your Ollama host (e.g. `http://localhost:11434` or `http://host.docker.internal:11434` inside Docker).
-- **OpenAI**: set `OPENAI_API_KEY` in the environment.
-- **Anthropic**: set `ANTHROPIC_API_KEY` in the environment.
-
-If you are running via Docker, rebuild after dependency changes:
+## Temporal (Local)
+Start Temporal using Docker Compose:
 ```bash
 cd docker
-docker compose build --no-cache
-docker compose up
+docker compose -f temporal-compose.yml up -d
 ```
 
-## Example Workflow
-
-`User request → planning node → CrewAI execution → tool call → validation node → final output`
-
-The example workflow is built in `orchestrator/graph.py` and wired to the API in `api/app.py`.
-
-## Fault Injection
-
-Use the synthetic MCP server’s `fault` config to simulate:
-- `success`
-- `timeout`
-- `malformed`
-- `rate_limit`
-- `delay`
-- `random`
-
-See `evaluation/scenarios/example.json` for an example.
-
-## Docker
-
+## Run Experiments
+LangGraph + Ollama:
 ```bash
-cd docker
-docker compose up --build
+python -m harness.run_experiments --config configs/experiment.yaml --orchestrator langgraph --runtime ollama --model llama3
 ```
 
-Set provider keys in `docker/.env` (see `docker/.env.example`). For Ollama on your host, use:
-```
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-```
-
-If you want Ollama in Docker, the compose file includes an `ollama` service. Pull a model:
+CrewAI + OpenAI:
 ```bash
-cd docker
-docker compose up -d ollama
-docker compose exec ollama ollama pull llama3
+export OPENAI_API_KEY=YOUR_KEY
+python -m harness.run_experiments --config configs/experiment.yaml --orchestrator crewai --runtime openai --model gpt-4o-mini
 ```
 
-### Running Evaluations in Docker
-The compose file mounts `evaluation/results` to your host. Run:
+Temporal:
 ```bash
-cd docker
-docker compose up -d
-docker compose exec orchestrator python -m evaluation.harness --scenarios evaluation/scenarios --output evaluation/results --export-csv
+python -m workers.temporal_worker
+python -m harness.run_experiments --config configs/experiment.yaml --orchestrator temporal
 ```
 
-### Telemetry Note
-CrewAI telemetry may attempt to register signal handlers; this fails when running inside worker threads. If you see
-`signal only works in main thread` errors, set these in `docker/.env`:
-```
-CREWAI_DISABLE_TELEMETRY=true
-CREWAI_DISABLE_TRACKING=true
-OTEL_SDK_DISABLED=true
+Or start the worker automatically:
+```bash
+python -m harness.run_temporal_experiments --config configs/experiment.yaml
 ```
 
-## Notes
+## Smoke Test
+Runs one task with each orchestrator using Ollama + filesystem tools:
+```bash
+python -m harness.smoke_test
+```
 
-- Logging uses JSON lines for easy ingestion.
-- Trace events are stored in state and emitted as log entries for replay.
-- CrewAI is optional; the scaffold runs with a fallback stub if CrewAI is not installed.
+## Results
+- JSONL traces: `evaluation/results/traces.jsonl`
+- Summary CSV: `evaluation/results/summary.csv`
+
+## Runtime Notes
+- **Ollama**: set `OLLAMA_BASE_URL` (or use `runtime.base_url` in config)
+- **OpenAI**: set `OPENAI_API_KEY`
+- **Anthropic**: set `ANTHROPIC_API_KEY`
+
+## Configs
+Edit `configs/experiment.yaml` for:
+- orchestrator selection
+- runtime/model
+- episode caps (`max_steps`, `max_llm_retries`, `max_tool_retries`)
+- fault injection (latency/jitter/timeouts, permission/missing paths)
+- Temporal address/task queue

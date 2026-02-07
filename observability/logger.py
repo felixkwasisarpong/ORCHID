@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 
@@ -67,3 +68,16 @@ def get_logger(name: str = "orchid") -> logging.Logger:
 
 def log_event(logger: logging.Logger, event_type: str, **fields: Any) -> None:
     logger.info(event_type, extra={"event_type": event_type, **fields})
+
+
+class JsonlWriter:
+    """Append-only JSONL writer for trace outputs."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write(self, payload: dict[str, Any]) -> None:
+        line = json.dumps(payload, ensure_ascii=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
