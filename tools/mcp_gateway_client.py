@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -39,6 +40,7 @@ class MCPGatewayClient:
         self._pending: Dict[int, asyncio.Future] = {}
         self._id_counter = 0
         self._tool_registry: Optional[ToolRegistry] = None
+        self._stderr_tail: deque[str] = deque(maxlen=20)
 
     async def __aenter__(self) -> "MCPGatewayClient":
         if self.config.transport == "stdio":
@@ -142,7 +144,12 @@ class MCPGatewayClient:
                 future = self._pending.pop(payload["id"], None)
                 if future and not future.done():
                     future.set_result(payload)
-        self._reject_pending(RuntimeError("MCP subprocess ended"))
+        return_code = self._proc.returncode if self._proc else None
+        stderr_tail = " | ".join(self._stderr_tail).strip()
+        detail = f"MCP subprocess ended (returncode={return_code})"
+        if stderr_tail:
+            detail = f"{detail} stderr={stderr_tail}"
+        self._reject_pending(RuntimeError(detail))
 
     async def _stderr_loop(self) -> None:
         assert self._proc and self._proc.stderr
@@ -153,6 +160,7 @@ class MCPGatewayClient:
                 return
             if not line:
                 break
+            self._stderr_tail.append(line.decode("utf-8", errors="replace").strip())
 
     async def _request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if self.config.transport == "http":

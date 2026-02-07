@@ -111,7 +111,7 @@ async def run_once(
 ) -> RunTrace:
     task_def = get_task(task_id)
     run_id = f"{task_id}-{orchestrator_name}-{runtime_name}-{uuid4().hex[:8]}"
-    sandbox_root = Path(config.sandbox_dir) / run_id
+    sandbox_root = (Path(config.sandbox_dir).resolve() / run_id).resolve()
     sandbox_root.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(timezone.utc).isoformat()
     started_perf = time.perf_counter()
