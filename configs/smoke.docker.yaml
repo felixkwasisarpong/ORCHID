@@ -11,8 +11,8 @@ seeds:
 max_steps: 6
 max_llm_retries: 1
 max_tool_retries: 0
-results_dir: evaluation/results
-sandbox_dir: evaluation/sandboxes
+results_dir: ${HOST_PWD}/evaluation/results
+sandbox_dir: ${HOST_PWD}/evaluation/sandboxes
 transport: stdio
 gateway_cmd:
   - docker

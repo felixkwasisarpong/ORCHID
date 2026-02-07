@@ -1,50 +1,38 @@
-"""OpenAI runtime client (cloud)."""
+"""OpenAI runtime client."""
+
 from __future__ import annotations
 
-from typing import Any
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 import httpx
 
-from runtimes.base import LLMResponse, Message, RuntimeConfig, normalize_model, resolve_api_key, resolve_base_url
+from runtimes.base import RuntimeClient, RuntimeConfig
 
 
-class OpenAIClient:
-    def __init__(self, config: RuntimeConfig) -> None:
-        self.config = config
-        self.base_url = resolve_base_url(config) or "https://api.openai.com"
-        self.model = normalize_model(config.runtime, config.model)
-        api_key = resolve_api_key(config)
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required for OpenAI runtime")
-        self._client = httpx.AsyncClient(
-            base_url=self.base_url,
-            timeout=config.timeout_s,
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
+@dataclass
+class OpenAIClient(RuntimeClient):
+    config: RuntimeConfig
+    base_url: str = "https://api.openai.com/v1"
+    api_key: Optional[str] = None
 
-    async def complete(self, messages: list[Message], system_prompt: str | None = None) -> LLMResponse:
-        payload: dict[str, Any] = {
-            "model": self.model,
+    async def chat(self, messages: List[Dict[str, Any]], seed: Optional[int] = None) -> str:
+        key = self.api_key or os.getenv("OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError("OPENAI_API_KEY is not set")
+        payload: Dict[str, Any] = {
+            "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
+            "response_format": {"type": "json_object"},
         }
-        if system_prompt:
-            payload["messages"] = [{"role": "system", "content": system_prompt}, *messages]
-        if self.config.json_mode:
-            payload["response_format"] = {"type": "json_object"}
-        if self.config.seed is not None:
-            payload["seed"] = self.config.seed
-        payload.update(self.config.extra)
-
-        response = await self._client.post("/v1/chat/completions", json=payload)
-        response.raise_for_status()
-        data = response.json()
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        content = message.get("content") or ""
-        usage = data.get("usage")
-        return LLMResponse(content=content, model=self.model, usage=usage)
-
-    async def close(self) -> None:
-        await self._client.aclose()
+        if seed is not None:
+            payload["seed"] = seed
+        headers = {"Authorization": f"Bearer {key}"}
+        async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
+            response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+        return data["choices"][0]["message"]["content"]

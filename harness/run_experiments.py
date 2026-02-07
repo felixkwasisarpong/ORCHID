@@ -1,256 +1,256 @@
-"""Experiment harness for orchestrator benchmarks."""
+"""Run experiment suites across orchestrators and runtimes."""
+
 from __future__ import annotations
 
 import argparse
 import asyncio
 import csv
-import os
-import shutil
-import uuid
+import time
 from pathlib import Path
-from typing import Any
+import shutil
+from typing import Dict, List
+from uuid import uuid4
 
-import yaml
-from pydantic import BaseModel, Field
-
-from benchmarks.tasks import BenchmarkTask, all_tasks
-from observability.logger import JsonlWriter
+from benchmarks.tasks import get_task, list_task_specs
+from harness.config import ExperimentConfig, FaultConfig, load_config
+from observability.logger import JSONLLogger, default_trace_path
 from observability.trace_schema import RunTrace
+from orchestrators.autogen_engine import AutoGenEngine
+from orchestrators.common import EpisodeConfig
 from orchestrators.crewai_engine import CrewAIEngine
 from orchestrators.langgraph_engine import LangGraphEngine
-from orchestrators.temporal_engine import (
-    FaultSettingsModel,
-    MCPSettings,
-    TemporalEngine,
-    TemporalSettings,
-)
-from orchestrators.types import EpisodeConfig
-from runtimes.base import RuntimeConfig, RuntimeName
-from tools.mcp_gateway_client import (
-    FaultSettings,
-    MCPGatewayClient,
-    MCPGatewayTransport,
-    stdio_gateway_from_env,
-)
+from runtimes.anthropic_client import AnthropicClient
+from runtimes.base import RuntimeConfig
+from runtimes.ollama_client import OllamaClient
+from runtimes.openai_client import OpenAIClient
+from tools.mcp_gateway_client import MCPClientConfig, MCPGatewayClient
 
 
-class FaultConfig(BaseModel):
-    permission_path: str | None = None
-    missing_path: str | None = None
-    latency_ms: int = 0
-    jitter_ms: int = 0
-    timeout_s: float | None = None
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run orchestrator experiments")
+    parser.add_argument("--config", type=str, help="Path to YAML config", default=None)
+    parser.add_argument("--orchestrator", type=str, help="Override orchestrator")
+    parser.add_argument("--runtime", type=str, help="Override runtime")
+    parser.add_argument("--task", type=str, help="Task ID or 'all'")
+    parser.add_argument("--seeds", type=int, nargs="+", help="Seeds list")
+    parser.add_argument("--fault-permission", type=str, help="Relative path to chmod read-only")
+    parser.add_argument("--fault-missing", type=str, help="Relative path to delete")
+    parser.add_argument("--fault-latency-ms", type=float, help="Client-side latency in ms")
+    parser.add_argument("--fault-jitter-ms", type=float, help="Client-side jitter in ms")
+    parser.add_argument("--fault-timeout-s", type=float, help="Client-side tool timeout in seconds")
+    return parser.parse_args()
 
 
-class MCPConfig(BaseModel):
-    transport: MCPGatewayTransport = MCPGatewayTransport.STDIO
-    base_url: str | None = None
-    command: str | None = None
-    args: list[str] | None = None
-    reuse_session: bool = True
+def apply_faults(sandbox_root: Path, faults: FaultConfig) -> None:
+    if faults.permission_path:
+        target = sandbox_root / faults.permission_path
+        if target.exists():
+            target.chmod(0o444)
+    if faults.missing_path:
+        target = sandbox_root / faults.missing_path
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
 
 
-class ExperimentConfig(BaseModel):
-    orchestrator: str = "langgraph"
-    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
-    episode: EpisodeConfig = Field(default_factory=EpisodeConfig)
-    runs: int = 1
-    seeds: list[int] | None = None
-    tasks: list[str] | None = None
-    sandbox_root: str = "evaluation/sandboxes"
-    output_dir: str = "evaluation/results"
-    mcp: MCPConfig = Field(default_factory=MCPConfig)
-    faults: FaultConfig = Field(default_factory=FaultConfig)
-    temporal: TemporalSettings = Field(default_factory=TemporalSettings)
+def build_runtime(runtime_name: str, config: ExperimentConfig) -> tuple[str, object]:
+    model = config.runtime_models.get(runtime_name)
+    if not model:
+        default_models = {
+            "ollama": "llama3.1",
+            "openai": "gpt-4.1-mini",
+            "anthropic": "claude-3-5-sonnet-20241022",
+        }
+        model = default_models.get(runtime_name, "")
+    if not model:
+        raise ValueError(f"No model configured for runtime {runtime_name}")
+    runtime_config = RuntimeConfig(model=model, temperature=0.0, max_tokens=512, timeout_s=config.timeout_s)
+
+    if runtime_name == "ollama":
+        return runtime_name, OllamaClient(runtime_config)
+    if runtime_name == "openai":
+        return runtime_name, OpenAIClient(runtime_config)
+    if runtime_name == "anthropic":
+        return runtime_name, AnthropicClient(runtime_config)
+    raise ValueError(f"Unknown runtime: {runtime_name}")
 
 
-def load_config(path: str | Path) -> ExperimentConfig:
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    return ExperimentConfig.model_validate(data)
+def build_orchestrator(
+    name: str,
+    runtime: object,
+    tool_client: MCPGatewayClient,
+    validator,
+    episode_config: EpisodeConfig,
+):
+    if name == "langgraph":
+        return LangGraphEngine(runtime, tool_client, validator, episode_config)
+    if name == "crewai":
+        return CrewAIEngine(runtime, tool_client, validator, episode_config)
+    if name == "autogen":
+        return AutoGenEngine(runtime, tool_client, validator, episode_config)
+    raise ValueError(f"Unknown orchestrator: {name}")
 
 
-def apply_permission_fault(base: Path, relative_path: str | None) -> None:
-    target = base / relative_path if relative_path else base
-    if not target.exists():
-        return
-    if target.is_dir():
-        os.chmod(target, 0o555)
-    else:
-        os.chmod(target, 0o444)
+def task_ids_from_config(config: ExperimentConfig) -> List[str]:
+    if not config.tasks or "all" in config.tasks:
+        return [spec.id for spec in list_task_specs()]
+    return config.tasks
 
 
-def apply_missing_fault(base: Path, relative_path: str | None) -> None:
-    if not relative_path:
-        return
-    target = base / relative_path
-    if target.is_dir():
-        shutil.rmtree(target)
-    elif target.exists():
-        target.unlink()
+async def run_once(
+    orchestrator_name: str,
+    runtime_name: str,
+    runtime,
+    task_id: str,
+    seed: int,
+    config: ExperimentConfig,
+    results_dir: Path,
+) -> RunTrace:
+    task_def = get_task(task_id)
+    run_id = f"{task_id}-{orchestrator_name}-{runtime_name}-{uuid4().hex[:8]}"
+    sandbox_root = Path(config.sandbox_dir) / run_id
+    sandbox_root.mkdir(parents=True, exist_ok=True)
 
+    task_def.setup(sandbox_root)
+    apply_faults(sandbox_root, config.faults)
 
-def build_mcp_client(config: MCPConfig, faults: FaultConfig) -> MCPGatewayClient:
-    transport = config.transport
-    if transport == MCPGatewayTransport.STDIO:
-        command = config.command
-        args = config.args
-        if not command and not args:
-            command, args, env = stdio_gateway_from_env()
-        else:
-            env = None
-        return MCPGatewayClient(
-            transport=transport,
-            command=command,
-            args=args,
-            env=env,
-            reuse_session=config.reuse_session,
-            faults=FaultSettings(
-                latency_ms=faults.latency_ms,
-                jitter_ms=faults.jitter_ms,
-                timeout_s=faults.timeout_s,
-            ),
-        )
-
-    return MCPGatewayClient(
-        transport=transport,
-        base_url=config.base_url,
-        reuse_session=config.reuse_session,
-        faults=FaultSettings(
-            latency_ms=faults.latency_ms,
-            jitter_ms=faults.jitter_ms,
-            timeout_s=faults.timeout_s,
-        ),
+    episode_config = EpisodeConfig(
+        max_steps=config.max_steps,
+        max_llm_retries=config.max_llm_retries,
+        max_tool_retries=config.max_tool_retries,
+        timeout_s=config.timeout_s,
+        tool_timeout_s=config.faults.tool_timeout_s or config.tool_timeout_s,
     )
 
+    gateway_cmd = None
+    if config.gateway_cmd:
+        gateway_cmd = [arg.format(sandbox_root=str(sandbox_root)) for arg in config.gateway_cmd]
 
-def resolve_tasks(task_ids: list[str] | None) -> list[BenchmarkTask]:
-    tasks = {task.spec.task_id: task for task in all_tasks()}
-    if not task_ids:
-        return list(tasks.values())
-    missing = [task_id for task_id in task_ids if task_id not in tasks]
-    if missing:
-        raise ValueError(f"Unknown tasks: {missing}")
-    return [tasks[task_id] for task_id in task_ids]
+    mcp_config = MCPClientConfig(
+        transport=config.transport,
+        gateway_cmd=gateway_cmd,
+        http_url=config.http_url,
+        request_timeout_s=episode_config.tool_timeout_s,
+        latency_ms=config.faults.latency_ms,
+        jitter_ms=config.faults.jitter_ms,
+    )
 
+    trace_path = default_trace_path(results_dir, run_id)
+    logger = JSONLLogger(trace_path)
 
-def export_csv(traces: list[RunTrace], output_path: Path) -> None:
-    rows: list[dict[str, Any]] = []
-    for trace in traces:
-        rows.append(
-            {
-                "run_id": trace.run_id,
-                "orchestrator": trace.orchestrator,
-                "runtime": trace.runtime,
-                "model": trace.model,
-                "task_id": trace.task_id,
-                "seed": trace.seed,
-                "success": trace.success,
-                "llm_calls": trace.counters.llm_calls,
-                "tool_calls": trace.counters.tool_calls,
-                "retries": trace.counters.retries,
-                "total_latency_ms": trace.counters.total_latency_ms,
-            }
+    async with MCPGatewayClient(mcp_config) as tool_client:
+        orchestrator = build_orchestrator(
+            orchestrator_name,
+            runtime,
+            tool_client,
+            task_def.validate,
+            episode_config,
         )
-    with output_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()) if rows else [])
-        if rows:
-            writer.writeheader()
-            writer.writerows(rows)
+        trace = await orchestrator.run(task_def.spec, sandbox_root, seed, run_id, runtime_name)
+
+    trace = trace.model_copy(update={
+        "fault_config": {
+            "permission_path": config.faults.permission_path,
+            "missing_path": config.faults.missing_path,
+            "latency_ms": config.faults.latency_ms,
+            "jitter_ms": config.faults.jitter_ms,
+            "tool_timeout_s": episode_config.tool_timeout_s,
+        }
+    })
+
+    logger.log_trace(trace)
+    return trace
 
 
-async def run_experiments(config: ExperimentConfig) -> list[RunTrace]:
-    tasks = resolve_tasks(config.tasks)
-    output_dir = Path(config.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    writer = JsonlWriter(output_dir / "traces.jsonl")
-    traces: list[RunTrace] = []
+async def run_suite(config: ExperimentConfig) -> List[RunTrace]:
+    results_dir = Path(config.results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
 
-    seeds = config.seeds or list(range(config.runs))
-    if config.seeds and config.runs != len(config.seeds):
-        raise ValueError("runs must match number of seeds when seeds are provided")
-
-    for task in tasks:
-        for run_index, seed in enumerate(seeds):
-            run_id = str(uuid.uuid4())
-            sandbox = Path(config.sandbox_root) / task.spec.task_id / f"run-{run_index}-{run_id}"
-            sandbox.mkdir(parents=True, exist_ok=True)
-            task.setup(sandbox, seed)
-
-            apply_missing_fault(sandbox, config.faults.missing_path)
-            apply_permission_fault(sandbox, config.faults.permission_path)
-
-            runtime = config.runtime.model_copy(deep=True)
-            runtime.seed = seed
-
-            if config.orchestrator == "langgraph":
-                mcp_client = build_mcp_client(config.mcp, config.faults)
-                engine = LangGraphEngine(runtime, mcp_client, config.episode)
-                trace = await engine.run(
-                    run_id=run_id,
-                    task_id=task.spec.task_id,
-                    description=task.spec.description,
-                    sandbox=sandbox,
-                    validate=task.validate,
-                    allowed_tool_names=task.allowed_tools,
-                    seed=seed,
-                )
-                await mcp_client.close()
-            elif config.orchestrator == "crewai":
-                mcp_client = build_mcp_client(config.mcp, config.faults)
-                engine = CrewAIEngine(runtime, mcp_client, config.episode)
-                trace = await engine.run(
-                    run_id=run_id,
-                    task_id=task.spec.task_id,
-                    description=task.spec.description,
-                    sandbox=sandbox,
-                    validate=task.validate,
-                    allowed_tool_names=task.allowed_tools,
-                    seed=seed,
-                )
-                await mcp_client.close()
-            elif config.orchestrator == "temporal":
-                mcp_settings = MCPSettings.model_validate(config.mcp.model_dump())
-                fault_settings = FaultSettingsModel(
-                    latency_ms=config.faults.latency_ms,
-                    jitter_ms=config.faults.jitter_ms,
-                    timeout_s=config.faults.timeout_s,
-                )
-                engine = TemporalEngine(runtime, config.episode, config.temporal, mcp_settings, fault_settings)
-                trace = await engine.run(
-                    run_id=run_id,
-                    task_id=task.spec.task_id,
-                    description=task.spec.description,
-                    sandbox=sandbox,
-                    allowed_tool_names=task.allowed_tools,
-                    seed=seed,
-                )
-            else:
-                raise ValueError(f"Unknown orchestrator: {config.orchestrator}")
-
-            writer.write(trace.model_dump())
-            traces.append(trace)
-
-    export_csv(traces, output_dir / "summary.csv")
+    traces: List[RunTrace] = []
+    for orchestrator_name in config.orchestrators:
+        for runtime_name in config.runtimes:
+            runtime_name, runtime = build_runtime(runtime_name, config)
+            for task_id in task_ids_from_config(config):
+                for seed in config.seeds:
+                    trace = await run_once(
+                        orchestrator_name,
+                        runtime_name,
+                        runtime,
+                        task_id,
+                        seed,
+                        config,
+                        results_dir,
+                    )
+                    traces.append(trace)
     return traces
 
 
+def write_summary(traces: List[RunTrace], results_dir: Path) -> Path:
+    path = results_dir / f"summary_{int(time.time())}.csv"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            [
+                "run_id",
+                "orchestrator",
+                "runtime",
+                "task_id",
+                "seed",
+                "success",
+                "llm_calls",
+                "tool_calls",
+                "retries",
+                "total_latency_ms",
+            ]
+        )
+        for trace in traces:
+            writer.writerow(
+                [
+                    trace.run_id,
+                    trace.orchestrator,
+                    trace.runtime,
+                    trace.task_id,
+                    trace.seed,
+                    trace.success,
+                    trace.llm_calls,
+                    trace.tool_calls,
+                    trace.retries,
+                    f"{trace.total_latency_ms:.2f}",
+                ]
+            )
+    return path
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run ORCHID benchmarks")
-    parser.add_argument("--config", default="configs/experiment.yaml")
-    parser.add_argument("--orchestrator", choices=["langgraph", "crewai", "temporal"], default=None)
-    parser.add_argument("--runtime", choices=[runtime.value for runtime in RuntimeName], default=None)
-    parser.add_argument("--model", default=None)
-    args = parser.parse_args()
+    args = parse_args()
+    config_path = Path(args.config) if args.config else None
+    config = load_config(config_path)
 
-    config = load_config(args.config)
     if args.orchestrator:
-        config.orchestrator = args.orchestrator
+        config.orchestrators = [args.orchestrator]
     if args.runtime:
-        config.runtime.runtime = RuntimeName(args.runtime)
-    if args.model:
-        config.runtime.model = args.model
+        config.runtimes = [args.runtime]
+    if args.task:
+        config.tasks = [args.task]
+    if args.seeds:
+        config.seeds = args.seeds
 
-    asyncio.run(run_experiments(config))
+    if args.fault_permission:
+        config.faults.permission_path = args.fault_permission
+    if args.fault_missing:
+        config.faults.missing_path = args.fault_missing
+    if args.fault_latency_ms is not None:
+        config.faults.latency_ms = args.fault_latency_ms
+    if args.fault_jitter_ms is not None:
+        config.faults.jitter_ms = args.fault_jitter_ms
+    if args.fault_timeout_s is not None:
+        config.faults.tool_timeout_s = args.fault_timeout_s
+
+    traces = asyncio.run(run_suite(config))
+    summary_path = write_summary(traces, Path(config.results_dir))
+    print(f"Summary written to {summary_path}")
 
 
 if __name__ == "__main__":

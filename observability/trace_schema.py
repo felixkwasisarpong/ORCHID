@@ -1,75 +1,79 @@
-"""Pydantic trace schemas for experiment runs."""
+"""Pydantic models for structured traces and action schemas."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Literal, Annotated
-
-from pydantic import BaseModel, Field
-
-
-def utc_now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 
 
 class ToolCall(BaseModel):
     name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: Dict[str, Any] = Field(default_factory=dict)
 
 
-class StepActionToolCall(BaseModel):
-    type: Literal["tool_call"]
-    tool_call: ToolCall
+class StepAction(BaseModel):
+    action_type: Literal["tool_call", "finalize"]
+    tool_call: Optional[ToolCall] = None
+    final_answer: Optional[str] = None
 
-
-class StepActionFinalize(BaseModel):
-    type: Literal["finalize"]
-    answer: str
-
-
-StepAction = Annotated[
-    StepActionToolCall | StepActionFinalize,
-    Field(discriminator="type"),
-]
+    @model_validator(mode="after")
+    def _validate_action(self) -> "StepAction":
+        if self.action_type == "tool_call":
+            if self.tool_call is None:
+                raise ValueError("tool_call must be provided when action_type=tool_call")
+        if self.action_type == "finalize":
+            if not self.final_answer:
+                raise ValueError("final_answer must be provided when action_type=finalize")
+        return self
 
 
 class StepResult(BaseModel):
     step_index: int
     action: StepAction
-    llm_latency_ms: float | None = None
-    tool_latency_ms: float | None = None
-    validation_latency_ms: float | None = None
-    total_latency_ms: float | None = None
-    tool_result: dict[str, Any] | None = None
-    validation: dict[str, Any] | None = None
-    errors: list[str] = Field(default_factory=list)
-
-
-class RunCounters(BaseModel):
-    llm_calls: int = 0
-    tool_calls: int = 0
+    tool_result: Optional[Any] = None
+    validated: bool = False
+    validation_error: Optional[str] = None
+    llm_latency_ms: float = 0.0
+    tool_latency_ms: float = 0.0
+    step_latency_ms: float = 0.0
+    error: Optional[str] = None
     retries: int = 0
-    total_latency_ms: float = 0.0
 
 
 class TaskSpec(BaseModel):
-    task_id: str
+    id: str
+    name: str
     description: str
-    max_steps: int = 6
-    allowed_tools: list[str] = Field(default_factory=list)
-    success_criteria: str | None = None
+    allowed_tools: List[str]
+    max_steps: int = 8
+    max_llm_retries: int = 2
+    max_tool_retries: int = 1
+    timeout_s: float = 20.0
 
 
 class RunTrace(BaseModel):
     run_id: str
     orchestrator: str
     runtime: str
-    model: str | None = None
     task_id: str
-    seed: int | None = None
-    start_time: str = Field(default_factory=utc_now_iso)
-    end_time: str | None = None
-    success: bool = False
-    errors: list[str] = Field(default_factory=list)
-    steps: list[StepResult] = Field(default_factory=list)
-    counters: RunCounters = Field(default_factory=RunCounters)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    seed: int
+    started_at: str
+    ended_at: str
+    total_latency_ms: float
+    llm_calls: int
+    tool_calls: int
+    retries: int
+    steps: List[StepResult]
+    success: bool
+    error: Optional[str] = None
+    fault_config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MCPToolSpec(BaseModel):
+    name: str
+    description: Optional[str] = None
+    input_schema: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolRegistry(BaseModel):
+    tools: List[MCPToolSpec]

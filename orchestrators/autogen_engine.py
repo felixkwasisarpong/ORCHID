@@ -1,4 +1,4 @@
-"""CrewAI-based orchestrator (multi-agent roles)."""
+"""AutoGen-based orchestrator (multi-agent conversation)."""
 
 from __future__ import annotations
 
@@ -21,32 +21,44 @@ from runtimes.base import RuntimeClient
 from tools.mcp_gateway_client import MCPGatewayClient
 
 try:
-    from crewai import Agent, Crew, Process, Task
+    import autogen
 except Exception:  # noqa: BLE001
-    Agent = None
-    Crew = None
-    Process = None
-    Task = None
+    autogen = None
 
 
-class CrewRuntimeAdapter:
-    def __init__(self, runtime: RuntimeClient, seed: int) -> None:
-        self.runtime = runtime
-        self.seed = seed
+class AutoGenMetrics:
+    def __init__(self) -> None:
         self.llm_calls = 0
         self.total_latency_ms = 0.0
 
-    def __call__(self, prompt: str, **kwargs) -> str:  # type: ignore[override]
+
+class RuntimeConversableAgent:  # lightweight wrapper around AutoGen if available
+    def __init__(self, name: str, runtime: RuntimeClient, seed: int, metrics: AutoGenMetrics) -> None:
+        self.name = name
+        self.runtime = runtime
+        self.seed = seed
+        self.metrics = metrics
+        if autogen is not None:
+            self.agent = autogen.ConversableAgent(
+                name=name,
+                system_message=f"You are {name}.",
+                llm_config=False,
+                human_input_mode="NEVER",
+            )
+        else:
+            self.agent = None
+
+    def generate(self, prompt: str) -> str:
         start = time.perf_counter()
         result = asyncio.run(self.runtime.chat([{"role": "user", "content": prompt}], seed=self.seed))
         end = time.perf_counter()
-        self.llm_calls += 1
-        self.total_latency_ms += (end - start) * 1000
+        self.metrics.llm_calls += 1
+        self.metrics.total_latency_ms += (end - start) * 1000
         return result
 
 
 @dataclass
-class CrewAIEngine:
+class AutoGenEngine:
     runtime: RuntimeClient
     tool_client: MCPGatewayClient
     validator: Callable[[Path], Tuple[bool, str]]
@@ -55,8 +67,8 @@ class CrewAIEngine:
     async def run(
         self, task: TaskSpec, sandbox_root: Path, seed: int, run_id: str, runtime_name: str
     ) -> RunTrace:
-        if Agent is None:
-            raise RuntimeError("crewai is not installed. Install crewai to use this orchestrator.")
+        if autogen is None:
+            raise RuntimeError("autogen is not installed. Install pyautogen to use this orchestrator.")
 
         started_at = datetime.now(timezone.utc).isoformat()
         start_ts = time.perf_counter()
@@ -74,46 +86,16 @@ class CrewAIEngine:
             messages = build_messages(task, tool_registry, history, sandbox_root)
             prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
 
-            adapter = CrewRuntimeAdapter(self.runtime, seed)
-            planner = Agent(
-                role="Planner",
-                goal="Propose the next StepAction JSON.",
-                backstory="Expert at planning tool usage.",
-                llm=adapter,
-                verbose=False,
-            )
-            critic = Agent(
-                role="Critic",
-                goal="Validate and correct the StepAction JSON.",
-                backstory="Ensures strict schema compliance.",
-                llm=adapter,
-                verbose=False,
-            )
+            metrics = AutoGenMetrics()
+            planner = RuntimeConversableAgent("planner", self.runtime, seed, metrics)
+            critic = RuntimeConversableAgent("critic", self.runtime, seed, metrics)
 
-            plan_task = Task(
-                description=f"Use the context to propose a StepAction JSON.\n\n{prompt_text}",
-                expected_output="Valid StepAction JSON only.",
-                agent=planner,
-            )
-            critique_task = Task(
-                description=(
-                    "Review the planner's output and return a corrected StepAction JSON only. "
-                    f"\n\nContext:\n{prompt_text}"
-                ),
-                expected_output="Valid StepAction JSON only.",
-                agent=critic,
-            )
+            planner_output = planner.generate(prompt_text)
+            critic_prompt = f"{prompt_text}\n\nPlanner output:\n{planner_output}\n\nReturn corrected StepAction JSON only."
+            critic_output = critic.generate(critic_prompt)
 
-            crew = Crew(
-                agents=[planner, critic],
-                tasks=[plan_task, critique_task],
-                process=Process.sequential,
-                verbose=False,
-            )
-
-            crew_output = str(await asyncio.to_thread(crew.kickoff))
-            llm_calls += adapter.llm_calls
-            llm_latency_ms = adapter.total_latency_ms
+            llm_calls += metrics.llm_calls
+            llm_latency_ms = metrics.total_latency_ms
             llm_retries = 0
 
             tool_latency_ms = 0.0
@@ -122,9 +104,8 @@ class CrewAIEngine:
             tool_retries = 0
 
             try:
-                # Attempt to parse crew output first; fallback to repair loop if invalid.
                 try:
-                    action = StepAction.model_validate(json.loads(crew_output))
+                    action = StepAction.model_validate(json.loads(critic_output))
                 except Exception:  # noqa: BLE001
                     action, llm_inc, llm_latency_ms2, llm_retries = await call_llm_for_action(
                         self.runtime,
@@ -137,9 +118,9 @@ class CrewAIEngine:
                     retries += llm_retries
             except Exception as exc:  # noqa: BLE001
                 error = str(exc)
-                action = None
+                break
 
-            if action and action.action_type == "tool_call":
+            if action.action_type == "tool_call":
                 if action.tool_call is None:
                     error = "tool_call missing"
                 elif action.tool_call.name not in task.allowed_tools:
@@ -161,9 +142,6 @@ class CrewAIEngine:
 
             validated, validation_error = self.validator(sandbox_root)
             step_end = time.perf_counter()
-
-            if action is None:
-                break
 
             step_result = StepResult(
                 step_index=step_index,
@@ -193,7 +171,7 @@ class CrewAIEngine:
 
         return RunTrace(
             run_id=run_id,
-            orchestrator="crewai",
+            orchestrator="autogen",
             runtime=runtime_name,
             task_id=task.id,
             seed=seed,

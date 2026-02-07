@@ -1,0 +1,39 @@
+orchestrators:
+  - langgraph
+  - crewai
+  - autogen
+runtimes:
+  - ollama
+# Use "all" to run every task
+tasks:
+  - all
+seeds:
+  - 1
+max_steps: 8
+max_llm_retries: 2
+max_tool_retries: 1
+timeout_s: 20.0
+tool_timeout_s: 10.0
+results_dir: evaluation/results
+sandbox_dir: evaluation/sandboxes
+transport: stdio
+# Example for stdio with Docker MCP Tools filesystem server:
+# gateway_cmd:
+#   - docker
+#   - run
+#   - -i
+#   - --rm
+#   - -v
+#   - "{sandbox_root}:/local-directory"
+#   - mcp/filesystem
+#   - /local-directory
+runtime_models:
+  ollama: llama3.1
+  openai: gpt-4.1-mini
+  anthropic: claude-3-5-sonnet-20241022
+faults:
+  permission_path: null
+  missing_path: null
+  latency_ms: 0.0
+  jitter_ms: 0.0
+  tool_timeout_s: null

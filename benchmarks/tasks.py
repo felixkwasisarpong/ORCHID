@@ -1,321 +1,331 @@
 """Filesystem benchmark task definitions."""
+
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable, Dict, List, Tuple
 
 from observability.trace_schema import TaskSpec
 
 
+ALLOWED_FS_TOOLS = [
+    "read_file",
+    "write_file",
+    "list_directory",
+    "create_directory",
+    "delete_file",
+    "move_file",
+    "stat",
+    "search",
+]
+
+
 @dataclass
-class BenchmarkTask:
+class TaskDefinition:
     spec: TaskSpec
-    setup: Callable[[Path, int | None], None]
-    validate: Callable[[Path], dict[str, Any]]
-    allowed_tools: list[str]
+    setup: Callable[[Path], None]
+    validate: Callable[[Path], Tuple[bool, str]]
 
 
-def _write(path: Path, content: str) -> None:
+def _write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
-def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+def _write_json(path: Path, payload: dict) -> None:
+    _write_text(path, json.dumps(payload, indent=2))
 
 
-def _success(**details: Any) -> dict[str, Any]:
-    return {"success": True, **details}
+def _write_csv(path: Path, rows: List[List[str]]) -> None:
+    content = "\n".join([",".join(row) for row in rows]) + "\n"
+    _write_text(path, content)
 
 
-def _failure(message: str, **details: Any) -> dict[str, Any]:
-    return {"success": False, "message": message, **details}
+def _validate_text(path: Path, expected: str) -> Tuple[bool, str]:
+    if not path.exists():
+        return False, f"Missing file: {path}"
+    actual = path.read_text(encoding="utf-8").strip()
+    if actual != expected:
+        return False, f"Expected '{expected}' but got '{actual}'"
+    return True, ""
 
 
-def task_create_hello() -> BenchmarkTask:
+def _validate_contains(path: Path, expected: str) -> Tuple[bool, str]:
+    if not path.exists():
+        return False, f"Missing file: {path}"
+    actual = path.read_text(encoding="utf-8")
+    if expected not in actual:
+        return False, f"Expected to contain '{expected}'"
+    return True, ""
+
+
+def task_01_count_lines() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="create_hello",
-        description="Create hello.txt in the sandbox root with content 'hello world'.",
-        max_steps=4,
-        allowed_tools=["write_file"],
+        id="task_01_count_lines",
+        name="Count Lines",
+        description=(
+            "Read data/input.txt and write the number of lines as an integer to output/line_count.txt."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        base.mkdir(parents=True, exist_ok=True)
+    def setup(root: Path) -> None:
+        _write_text(root / "data/input.txt", "alpha\nbeta\ngamma\n")
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "hello.txt"
-        if not path.exists():
-            return _failure("hello.txt missing")
-        if _read(path).strip() != "hello world":
-            return _failure("hello.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_text(root / "output/line_count.txt", "3")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_sum_numbers() -> BenchmarkTask:
+def task_02_extract_json() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="sum_numbers",
-        description="Read numbers.txt in the sandbox root, sum the integers, and write the sum to sum.txt.",
-        max_steps=6,
-        allowed_tools=["read_file", "write_file"],
+        id="task_02_extract_json",
+        name="Extract JSON Value",
+        description=(
+            "Read data/config.json and write the value of key 'threshold' to output/threshold.txt."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "numbers.txt", "3\n7\n10\n")
+    def setup(root: Path) -> None:
+        _write_json(root / "data/config.json", {"mode": "fast", "threshold": 7})
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "sum.txt"
-        if not path.exists():
-            return _failure("sum.txt missing")
-        if _read(path).strip() != "20":
-            return _failure("sum.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_text(root / "output/threshold.txt", "7")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_sort_names() -> BenchmarkTask:
+def task_03_merge_files() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="sort_names",
-        description="Sort the lines in names.txt alphabetically and write to sorted.txt.",
-        max_steps=6,
-        allowed_tools=["read_file", "write_file"],
+        id="task_03_merge_files",
+        name="Merge Files",
+        description=(
+            "Read data/a.txt and data/b.txt, then write output/merged.txt with a.txt lines followed by b.txt lines."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "names.txt", "zoe\nalex\nmae\n")
+    def setup(root: Path) -> None:
+        _write_text(root / "data/a.txt", "alpha\nbeta\n")
+        _write_text(root / "data/b.txt", "gamma\ndelta\n")
 
-    def validate(base: Path) -> dict[str, Any]:
-        expected = "alex\nmae\nzoe"
-        path = base / "sorted.txt"
-        if not path.exists():
-            return _failure("sorted.txt missing")
-        if _read(path).strip() != expected:
-            return _failure("sorted.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_text(root / "output/merged.txt", "alpha\nbeta\ngamma\ndelta")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_json_toggle() -> BenchmarkTask:
+def task_04_rename_move() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="json_toggle",
-        description="Update config.json so enabled is true while keeping other fields unchanged.",
-        max_steps=6,
-        allowed_tools=["read_file", "write_file"],
+        id="task_04_rename_move",
+        name="Rename and Move",
+        description=(
+            "Move data/report.txt to archive/2026/report.txt. Create directories as needed."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "config.json", '{"enabled": false, "threshold": 3}')
+    def setup(root: Path) -> None:
+        _write_text(root / "data/report.txt", "quarterly results")
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "config.json"
-        if not path.exists():
-            return _failure("config.json missing")
-        text = _read(path).strip()
-        if "\"enabled\": true" not in text:
-            return _failure("enabled not true", content=text)
-        if "\"threshold\": 3" not in text:
-            return _failure("threshold changed", content=text)
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        path = root / "archive/2026/report.txt"
+        return _validate_text(path, "quarterly results")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_merge_files() -> BenchmarkTask:
+def task_05_list_index() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="merge_files",
-        description="Combine a.txt and b.txt into combined.txt with a.txt content first, then b.txt.",
-        max_steps=6,
-        allowed_tools=["read_file", "write_file"],
+        id="task_05_list_index",
+        name="Directory Index",
+        description=(
+            "List files in data/files and write sorted names to output/index.txt, one per line."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "a.txt", "alpha")
-        _write(base / "b.txt", "beta")
+    def setup(root: Path) -> None:
+        _write_text(root / "data/files/one.txt", "1")
+        _write_text(root / "data/files/two.txt", "2")
+        _write_text(root / "data/files/three.txt", "3")
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "combined.txt"
-        if not path.exists():
-            return _failure("combined.txt missing")
-        if _read(path).strip() != "alpha\nbeta":
-            return _failure("combined.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_text(root / "output/index.txt", "one.txt\nthree.txt\ntwo.txt")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_rename_file() -> BenchmarkTask:
+def task_06_replace_text() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="rename_file",
-        description="Rename draft.txt to final.txt in the sandbox root.",
-        max_steps=4,
-        allowed_tools=["move_file"],
+        id="task_06_replace_text",
+        name="Replace Text",
+        description=(
+            "Replace 'foo' with 'baz' in data/notes.txt and write result to output/notes.txt."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "draft.txt", "v1")
+    def setup(root: Path) -> None:
+        _write_text(root / "data/notes.txt", "foo bar foo")
 
-    def validate(base: Path) -> dict[str, Any]:
-        if (base / "draft.txt").exists():
-            return _failure("draft.txt still exists")
-        path = base / "final.txt"
-        if not path.exists():
-            return _failure("final.txt missing")
-        if _read(path).strip() != "v1":
-            return _failure("final.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_text(root / "output/notes.txt", "baz bar baz")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_delete_temp() -> BenchmarkTask:
+def task_07_delete_temp() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="delete_temp",
-        description="Delete temp.log from the sandbox root.",
-        max_steps=4,
-        allowed_tools=["delete_file"],
+        id="task_07_delete_temp",
+        name="Delete Temp Files",
+        description=(
+            "Delete all .tmp files under data/tmp. Keep non-.tmp files."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "temp.log", "discard")
+    def setup(root: Path) -> None:
+        _write_text(root / "data/tmp/a.tmp", "temp")
+        _write_text(root / "data/tmp/b.tmp", "temp")
+        _write_text(root / "data/tmp/keep.txt", "keep")
 
-    def validate(base: Path) -> dict[str, Any]:
-        if (base / "temp.log").exists():
-            return _failure("temp.log still exists")
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        if (root / "data/tmp/a.tmp").exists() or (root / "data/tmp/b.tmp").exists():
+            return False, "Temp files still present"
+        if not (root / "data/tmp/keep.txt").exists():
+            return False, "keep.txt missing"
+        return True, ""
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_count_lines() -> BenchmarkTask:
+def task_08_sum_csv() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="count_lines",
-        description="Count the number of lines in notes.txt and write the count to line_count.txt.",
-        max_steps=6,
-        allowed_tools=["read_file", "write_file"],
+        id="task_08_sum_csv",
+        name="Sum CSV",
+        description=(
+            "Read data/metrics.csv (header: value). Sum the values and write output/total.txt."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "notes.txt", "a\nb\nc\n")
+    def setup(root: Path) -> None:
+        _write_csv(root / "data/metrics.csv", [["value"], ["1"], ["2"], ["3"]])
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "line_count.txt"
-        if not path.exists():
-            return _failure("line_count.txt missing")
-        if _read(path).strip() != "3":
-            return _failure("line_count.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_text(root / "output/total.txt", "6")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_list_files() -> BenchmarkTask:
+def task_09_copy_if_contains() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="list_files",
-        description="List files in the sandbox root in alphabetical order and write to index.txt (one per line).",
-        max_steps=6,
-        allowed_tools=["list_directory", "write_file"],
+        id="task_09_copy_if_contains",
+        name="Copy If Contains",
+        description=(
+            "If data/msg.txt contains the word ALERT, copy it to output/alert.txt."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "alpha.txt", "a")
-        _write(base / "beta.txt", "b")
-        _write(base / "gamma.txt", "c")
+    def setup(root: Path) -> None:
+        _write_text(root / "data/msg.txt", "status: ALERT\n")
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "index.txt"
-        if not path.exists():
-            return _failure("index.txt missing")
-        expected = "alpha.txt\nbeta.txt\ngamma.txt"
-        if _read(path).strip() != expected:
-            return _failure("index.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_contains(root / "output/alert.txt", "ALERT")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_create_dir_and_file() -> BenchmarkTask:
+def task_10_append_log() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="create_dir_and_file",
-        description="Create directory data and write data/info.txt with content 'ok'.",
-        max_steps=6,
-        allowed_tools=["create_directory", "write_file"],
+        id="task_10_append_log",
+        name="Append Log",
+        description=(
+            "Append the line 'finish' to logs/run.log, preserving existing content."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        base.mkdir(parents=True, exist_ok=True)
+    def setup(root: Path) -> None:
+        _write_text(root / "logs/run.log", "start\n")
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "data" / "info.txt"
-        if not path.exists():
-            return _failure("data/info.txt missing")
-        if _read(path).strip() != "ok":
-            return _failure("info.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_text(root / "logs/run.log", "start\nfinish")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_replace_word() -> BenchmarkTask:
+def task_11_create_manifest() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="replace_word",
-        description="Replace the word 'red' with 'blue' in story.txt.",
-        max_steps=6,
-        allowed_tools=["read_file", "write_file"],
+        id="task_11_create_manifest",
+        name="Create Manifest",
+        description=(
+            "List all files under data/pkg and write sorted relative paths to output/manifest.txt."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "story.txt", "the red fox")
+    def setup(root: Path) -> None:
+        _write_text(root / "data/pkg/a.txt", "a")
+        _write_text(root / "data/pkg/b.txt", "b")
+        _write_text(root / "data/pkg/sub/c.txt", "c")
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "story.txt"
-        if not path.exists():
-            return _failure("story.txt missing")
-        if _read(path).strip() != "the blue fox":
-            return _failure("story.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        expected = "a.txt\nb.txt\nsub/c.txt"
+        return _validate_text(root / "output/manifest.txt", expected)
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def task_extract_json_field() -> BenchmarkTask:
+def task_12_normalize_whitespace() -> TaskDefinition:
     spec = TaskSpec(
-        task_id="extract_json_field",
-        description="Read record.json and write the value field to value.txt.",
-        max_steps=6,
-        allowed_tools=["read_file", "write_file"],
+        id="task_12_normalize_whitespace",
+        name="Normalize Whitespace",
+        description=(
+            "Replace multiple spaces with single spaces in data/raw.txt and write output/normalized.txt."
+        ),
+        allowed_tools=ALLOWED_FS_TOOLS,
     )
 
-    def setup(base: Path, seed: int | None) -> None:
-        _write(base / "record.json", '{"id": "abc", "value": 42}')
+    def setup(root: Path) -> None:
+        _write_text(root / "data/raw.txt", "alpha   beta    gamma")
 
-    def validate(base: Path) -> dict[str, Any]:
-        path = base / "value.txt"
-        if not path.exists():
-            return _failure("value.txt missing")
-        if _read(path).strip() != "42":
-            return _failure("value.txt content mismatch", content=_read(path))
-        return _success()
+    def validate(root: Path) -> Tuple[bool, str]:
+        return _validate_text(root / "output/normalized.txt", "alpha beta gamma")
 
-    return BenchmarkTask(spec=spec, setup=setup, validate=validate, allowed_tools=spec.allowed_tools)
+    return TaskDefinition(spec, setup, validate)
 
 
-def all_tasks() -> list[BenchmarkTask]:
-    return [
-        task_create_hello(),
-        task_sum_numbers(),
-        task_sort_names(),
-        task_json_toggle(),
-        task_merge_files(),
-        task_rename_file(),
-        task_delete_temp(),
-        task_count_lines(),
-        task_list_files(),
-        task_create_dir_and_file(),
-        task_replace_word(),
-        task_extract_json_field(),
+TASKS: Dict[str, TaskDefinition] = {
+    task.spec.id: task
+    for task in [
+        task_01_count_lines(),
+        task_02_extract_json(),
+        task_03_merge_files(),
+        task_04_rename_move(),
+        task_05_list_index(),
+        task_06_replace_text(),
+        task_07_delete_temp(),
+        task_08_sum_csv(),
+        task_09_copy_if_contains(),
+        task_10_append_log(),
+        task_11_create_manifest(),
+        task_12_normalize_whitespace(),
     ]
+}
+
+
+def list_task_specs() -> List[TaskSpec]:
+    return [task.spec for task in TASKS.values()]
+
+
+def get_task(task_id: str) -> TaskDefinition:
+    if task_id not in TASKS:
+        raise KeyError(f"Unknown task_id: {task_id}")
+    return TASKS[task_id]

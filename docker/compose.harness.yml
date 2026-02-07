@@ -1,0 +1,14 @@
+services:
+  harness:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    working_dir: ${PWD}
+    volumes:
+      - ${PWD}:${PWD}
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - HOST_PWD=${PWD}
+      - OPENAI_API_KEY
+      - ANTHROPIC_API_KEY
+    command: ["python", "-m", "harness.run_experiments", "--config", "configs/smoke.docker.yaml"]

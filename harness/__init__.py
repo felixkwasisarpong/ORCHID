@@ -1,1 +1,1 @@
-"""Experiment harness package."""
+"""Experiment harness."""
