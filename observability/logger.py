@@ -1,83 +1,30 @@
-"""Structured JSON logging utilities."""
+"""JSONL logger for run traces."""
+
 from __future__ import annotations
 
 import json
-import logging
-import sys
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Optional
+
+from observability.trace_schema import RunTrace
 
 
-STANDARD_ATTRS = {
-    "args",
-    "asctime",
-    "created",
-    "exc_info",
-    "exc_text",
-    "filename",
-    "funcName",
-    "levelname",
-    "levelno",
-    "lineno",
-    "module",
-    "msecs",
-    "message",
-    "msg",
-    "name",
-    "pathname",
-    "process",
-    "processName",
-    "relativeCreated",
-    "stack_info",
-    "thread",
-    "threadName",
-}
+@dataclass
+class JSONLLogger:
+    path: Path
 
-
-class JsonFormatter(logging.Formatter):
-    """Minimal JSON formatter that preserves extra fields."""
-
-    def format(self, record: logging.LogRecord) -> str:
-        payload: dict[str, Any] = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
-        for key, value in record.__dict__.items():
-            if key in STANDARD_ATTRS:
-                continue
-            payload[key] = value
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=True)
-
-
-def get_logger(name: str = "orchid") -> logging.Logger:
-    logger = logging.getLogger(name)
-    if logger.handlers:
-        return logger
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
-    logger.addHandler(handler)
-    logger.propagate = False
-    return logger
-
-
-def log_event(logger: logging.Logger, event_type: str, **fields: Any) -> None:
-    logger.info(event_type, extra={"event_type": event_type, **fields})
-
-
-class JsonlWriter:
-    """Append-only JSONL writer for trace outputs."""
-
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
+    def __post_init__(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def write(self, payload: dict[str, Any]) -> None:
-        line = json.dumps(payload, ensure_ascii=True)
+    def log_trace(self, trace: RunTrace) -> None:
+        payload = trace.model_dump()
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
+            handle.write(json.dumps(payload, ensure_ascii=False))
+            handle.write("\n")
+
+
+def default_trace_path(results_dir: Path, run_id: str) -> Path:
+    traces_dir = results_dir / "traces"
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    return traces_dir / f"{run_id}.jsonl"

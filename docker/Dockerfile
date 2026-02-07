@@ -1,25 +1,8 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+COPY . /app
 
-COPY pyproject.toml README.md /app/
-COPY orchestrator /app/orchestrator
-COPY orchestrators /app/orchestrators
-COPY runtimes /app/runtimes
-COPY benchmarks /app/benchmarks
-COPY harness /app/harness
-COPY workers /app/workers
-COPY tools /app/tools
-COPY observability /app/observability
-COPY api /app/api
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs npm \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --no-cache-dir ".[crew]"
-
-
-ENV PYTHONUNBUFFERED=1
-
-CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "harness.run_experiments", "--config", "configs/default.yaml"]

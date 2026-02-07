@@ -1,121 +1,99 @@
-# ORCHID
-Research-grade prototype for comparing three orchestrators over the same tool-calling workload.
+# ORCHID Orchestrator Benchmarks
+
+Research-grade Python prototype for comparing three in-process orchestrators over a shared tool-calling workload.
 
 **Orchestrators**
-- LangGraph-style (in-process state machine)
-- CrewAI (role/task multi-agent, in-process)
-- Temporal (durable workflows, replay-safe activities)
+- LangGraph (graph/state machine)
+- CrewAI (role/task multi-agent)
+- AutoGen (multi-agent conversation)
 
 **LLM runtimes**
 - Ollama (local)
 - OpenAI (cloud)
 - Anthropic (cloud)
 
-**What this is**
-- Minimal but extensible benchmark harness with shared schemas and traces
-- Deterministic prompts, caps, and tool schemas across orchestrators
+**Tools**
+- Docker MCP Gateway filesystem tools via stdio transport by default (streaming HTTP optional)
 
-**What this is not**
-- Production hardening or complete feature coverage
+## Setup
 
-## Architecture
-- `orchestrators/` Engines for LangGraph, CrewAI, Temporal
-- `runtimes/` LLM runtime clients (Ollama/OpenAI/Anthropic)
-- `tools/mcp_gateway_client.py` MCP Gateway client (stdio by default, Streamable HTTP optional)
-- `benchmarks/` 12 filesystem tasks + validators
-- `harness/` Experiment runner + smoke test
-- `observability/` JSONL traces and schemas
-- `docker/` Dockerfiles + Temporal compose
-
-
-## Install
-### Poetry
-```bash
-poetry install
-```
-Optional CrewAI support:
-```bash
-poetry install --extras crew
-```
-
-### uv
-```bash
-uv venv
-uv pip install -e .
-```
-Optional CrewAI support:
-```bash
-uv pip install -e ".[crew]"
-```
-
-## MCP Gateway (Filesystem Tools)
-The default transport is **stdio**, spawning the Docker MCP Gateway:
+1) Create a virtual environment and install dependencies.
 
 ```bash
-export MCP_GATEWAY_ALLOWED_PATHS="/absolute/path/to/ORCHID/evaluation/sandboxes"
-docker mcp gateway run
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-The harness defaults to `stdio` with `docker mcp gateway run`. To override, edit `configs/experiment.yaml` or set:
-- `MCP_GATEWAY_COMMAND`
-- `MCP_GATEWAY_ARGS`
+2) Ensure Docker MCP Gateway is available.
 
-For Streamable HTTP, set in config:
-```yaml
-mcp:
-  transport: streamable_http
-  base_url: http://localhost:8085
-```
+Stdio transport (default): the harness spawns the gateway automatically per run. If your gateway needs a filesystem root, set `gateway_cmd` in the YAML config with `{sandbox_root}` as a placeholder.
 
-## Temporal (Local)
-Start Temporal using Docker Compose:
+Streaming transport (optional): start a long-running gateway and point the client at it.
+
 ```bash
-cd docker
-docker compose -f temporal-compose.yml up -d
+# Example streaming gateway startup (adjust filesystem root to your sandbox directory)
+docker mcp gateway run --server filesystem --root $(pwd)/evaluation/sandboxes --listen 127.0.0.1:8080
+```
+
+3) Set API keys if using cloud runtimes.
+
+```bash
+export OPENAI_API_KEY=... 
+export ANTHROPIC_API_KEY=...
 ```
 
 ## Run Experiments
-LangGraph + Ollama:
-```bash
-python -m harness.run_experiments --config configs/experiment.yaml --orchestrator langgraph --runtime ollama --model llama3
-```
 
-CrewAI + OpenAI:
-```bash
-export OPENAI_API_KEY=YOUR_KEY
-python -m harness.run_experiments --config configs/experiment.yaml --orchestrator crewai --runtime openai --model gpt-4o-mini
-```
+Use the harness to run a full suite or targeted runs.
 
-Temporal:
 ```bash
-python -m workers.temporal_worker
-python -m harness.run_experiments --config configs/experiment.yaml --orchestrator temporal
-```
+# Full default suite
+python -m harness.run_experiments --config configs/default.yaml
 
-Or start the worker automatically:
-```bash
-python -m harness.run_temporal_experiments --config configs/experiment.yaml
+# Single orchestrator + runtime + task
+python -m harness.run_experiments --orchestrator langgraph --runtime ollama --task task_01_count_lines
 ```
 
 ## Smoke Test
-Runs one task with each orchestrator using Ollama + filesystem tools:
+
+Runs 1 task with each orchestrator using Ollama and filesystem tools.
+
 ```bash
-python -m harness.smoke_test
+python scripts/smoke_test.py
 ```
 
-## Results
-- JSONL traces: `evaluation/results/traces.jsonl`
-- Summary CSV: `evaluation/results/summary.csv`
+## Traces and Summary
 
-## Runtime Notes
-- **Ollama**: set `OLLAMA_BASE_URL` (or use `runtime.base_url` in config)
-- **OpenAI**: set `OPENAI_API_KEY`
-- **Anthropic**: set `ANTHROPIC_API_KEY`
+- JSONL traces: `evaluation/results/traces/` (one file per run)
+- Summary CSV: `evaluation/results/summary_<timestamp>.csv`
 
-## Configs
-Edit `configs/experiment.yaml` for:
-- orchestrator selection
-- runtime/model
-- episode caps (`max_steps`, `max_llm_retries`, `max_tool_retries`)
-- fault injection (latency/jitter/timeouts, permission/missing paths)
-- Temporal address/task queue
+Each trace includes consistent counters (`llm_calls`, `tool_calls`, `retries`, `total_latency_ms`) and per-step timings.
+
+## Configuration Notes
+
+- Edit `configs/default.yaml` to change models, max steps, retries, or fault injection.
+- For streaming MCP transport, set:
+  - `transport: http`
+  - `http_url: http://127.0.0.1:8080` (or your gateway address)
+- For stdio transport with explicit filesystem root, set:
+  - `gateway_cmd: ["docker", "mcp", "gateway", "run", "--server", "filesystem", "--root", "{sandbox_root}"]`
+- If your filesystem tool names differ from the defaults, update `benchmarks/tasks.py`.
+
+## Fault Injection
+
+Supported in the harness via config or CLI:
+- Permission fault: `--fault-permission path/inside/sandbox`
+- Missing file fault: `--fault-missing path/inside/sandbox`
+- Latency/jitter: `--fault-latency-ms 250 --fault-jitter-ms 50`
+- Tool timeout: `--fault-timeout-s 5`
+
+## Repository Layout
+
+- `orchestrators/` LangGraph, CrewAI, AutoGen engines
+- `runtimes/` Ollama, OpenAI, Anthropic clients
+- `tools/` MCP Gateway client
+- `benchmarks/` tasks and validator
+- `harness/` experiment runner
+- `observability/` JSONL logger and Pydantic schemas
+- `configs/` experiment configs

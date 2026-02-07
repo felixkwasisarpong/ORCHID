@@ -1,202 +1,167 @@
-"""MCP Gateway client supporting stdio and Streamable HTTP transports."""
+"""MCP Gateway client supporting stdio (default) and HTTP streaming."""
+
 from __future__ import annotations
 
 import asyncio
-import os
+import json
 import random
-import shlex
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+import httpx
 
-
-class MCPGatewayTransport(str, Enum):
-    STDIO = "stdio"
-    STREAMABLE_HTTP = "streamable_http"
-
-
-class MCPGatewayError(RuntimeError):
-    pass
-
-
-class ToolSpec(BaseModel):
-    name: str
-    description: str | None = None
-    input_schema: dict[str, Any]
+from observability.trace_schema import MCPToolSpec, ToolRegistry
 
 
 @dataclass
-class FaultSettings:
-    latency_ms: int = 0
-    jitter_ms: int = 0
-    timeout_s: float | None = None
+class MCPClientConfig:
+    transport: str = "stdio"  # "stdio" or "http"
+    gateway_cmd: list[str] = None
+    http_url: Optional[str] = None
+    request_timeout_s: float = 10.0
+    latency_ms: float = 0.0
+    jitter_ms: float = 0.0
+
+    def resolved_gateway_cmd(self) -> list[str]:
+        if self.gateway_cmd:
+            return self.gateway_cmd
+        return ["docker", "mcp", "gateway", "run"]
 
 
 class MCPGatewayClient:
-    def __init__(
-        self,
-        transport: MCPGatewayTransport = MCPGatewayTransport.STDIO,
-        base_url: str | None = None,
-        timeout_s: float = 10.0,
-        command: str | None = None,
-        args: list[str] | None = None,
-        env: dict[str, str] | None = None,
-        reuse_session: bool | None = None,
-        faults: FaultSettings | None = None,
-    ) -> None:
-        self.transport = transport
-        self.base_url = base_url or os.getenv("MCP_GATEWAY_HTTP_URL", "http://localhost:8085")
-        self.timeout_s = timeout_s
-        self.command = command
-        self.args = args or []
-        self.env = env
-        if reuse_session is None:
-            reuse_session = True
-        self.reuse_session = reuse_session
-        self.faults = faults or FaultSettings()
-        self._stdio_cm = None
-        self._session_cm = None
-        self._session = None
-        self._http_cm = None
-        self._http_session_cm = None
-        self._http_session = None
-        self._lock = None
-        self._tool_registry: dict[str, ToolSpec] = {}
+    def __init__(self, config: MCPClientConfig) -> None:
+        self.config = config
+        self._proc: Optional[asyncio.subprocess.Process] = None
+        self._reader_task: Optional[asyncio.Task] = None
+        self._pending: Dict[int, asyncio.Future] = {}
+        self._id_counter = 0
+        self._tool_registry: Optional[ToolRegistry] = None
 
-    async def _ensure_stdio_session(self) -> None:
-        if self._session is not None:
-            return
-        try:
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-        except Exception as exc:  # noqa: BLE001
-            raise MCPGatewayError(f"MCP stdio requires mcp package: {exc}") from exc
+    async def __aenter__(self) -> "MCPGatewayClient":
+        if self.config.transport == "stdio":
+            await self._start_stdio()
+        return self
 
-        if not self.command:
-            raise MCPGatewayError("MCP stdio requires a command to launch the gateway")
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        params = StdioServerParameters(command=self.command, args=self.args, env=self.env)
-        async with self._lock:
-            if self._session is not None:
-                return
-            self._stdio_cm = stdio_client(params)
-            read, write = await self._stdio_cm.__aenter__()
-            self._session_cm = ClientSession(read, write)
-            self._session = await self._session_cm.__aenter__()
-            await self._session.initialize()
-
-    async def _ensure_http_session(self) -> None:
-        if self._http_session is not None:
-            return
-        try:
-            from mcp.client.streamable_http import streamablehttp_client
-            from mcp.client.session import ClientSession
-        except Exception as exc:  # noqa: BLE001
-            raise MCPGatewayError(f"MCP streamable HTTP requires mcp package: {exc}") from exc
-
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        async with self._lock:
-            if self._http_session is not None:
-                return
-            self._http_cm = streamablehttp_client(self.base_url)
-            read, write, _ = await self._http_cm.__aenter__()
-            self._http_session_cm = ClientSession(read, write)
-            self._http_session = await self._http_session_cm.__aenter__()
-            await self._http_session.initialize()
-
-    async def list_tools(self) -> list[ToolSpec]:
-        if self.transport == MCPGatewayTransport.STDIO:
-            await self._ensure_stdio_session()
-            result = await self._session.list_tools()
-        else:
-            await self._ensure_http_session()
-            result = await self._http_session.list_tools()
-
-        tools = [ToolSpec(name=tool.name, description=tool.description, input_schema=tool.inputSchema) for tool in result.tools]
-        self._tool_registry = {tool.name: tool for tool in tools}
-        return tools
-
-    def get_tool(self, name: str) -> ToolSpec | None:
-        return self._tool_registry.get(name)
-
-    async def _delay_if_needed(self) -> None:
-        if self.faults.latency_ms <= 0 and self.faults.jitter_ms <= 0:
-            return
-        jitter = random.randint(0, max(self.faults.jitter_ms, 0))
-        delay_ms = max(self.faults.latency_ms, 0) + jitter
-        await asyncio.sleep(delay_ms / 1000.0)
-
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        await self._delay_if_needed()
-
-        if not self._tool_registry:
-            await self.list_tools()
-
-        tool = self._tool_registry.get(name)
-        if tool is None:
-            raise MCPGatewayError(f"Unknown tool: {name}")
-        _validate_args(tool.input_schema, arguments)
-
-        async def _call() -> dict[str, Any]:
-            if self.transport == MCPGatewayTransport.STDIO:
-                await self._ensure_stdio_session()
-                result = await self._session.call_tool(name, arguments=arguments)
-            else:
-                await self._ensure_http_session()
-                result = await self._http_session.call_tool(name, arguments=arguments)
-            return result.model_dump()
-
-        if self.faults.timeout_s:
-            try:
-                return await asyncio.wait_for(_call(), timeout=self.faults.timeout_s)
-            except asyncio.TimeoutError as exc:
-                raise MCPGatewayError("Tool call timed out") from exc
-        return await _call()
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close()
 
     async def close(self) -> None:
-        if self._session_cm is not None:
+        if self._reader_task:
+            self._reader_task.cancel()
+            self._reader_task = None
+        if self._proc:
+            self._proc.terminate()
             try:
-                await self._session_cm.__aexit__(None, None, None)
-            except RuntimeError:
-                pass
-        if self._stdio_cm is not None:
+                await asyncio.wait_for(self._proc.wait(), timeout=3)
+            except asyncio.TimeoutError:
+                self._proc.kill()
+            self._proc = None
+
+    async def list_tools(self) -> ToolRegistry:
+        if self._tool_registry is not None:
+            return self._tool_registry
+        try:
+            result = await self._request("tools/list", {})
+        except Exception:  # noqa: BLE001
+            result = await self._request("tools.list", {})
+        tools = []
+        for item in result.get("tools", []):
+            tools.append(
+                MCPToolSpec(
+                    name=item.get("name", ""),
+                    description=item.get("description"),
+                    input_schema=item.get("inputSchema", {}) or {},
+                )
+            )
+        self._tool_registry = ToolRegistry(tools=tools)
+        return self._tool_registry
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        await self._apply_latency()
+        try:
+            return await self._request("tools/call", {"name": name, "arguments": arguments})
+        except Exception:  # noqa: BLE001
+            return await self._request("tools.call", {"name": name, "arguments": arguments})
+
+    async def _apply_latency(self) -> None:
+        if self.config.latency_ms <= 0 and self.config.jitter_ms <= 0:
+            return
+        jitter = 0.0
+        if self.config.jitter_ms > 0:
+            jitter = random.uniform(-self.config.jitter_ms, self.config.jitter_ms)
+        delay = max(0.0, (self.config.latency_ms + jitter) / 1000.0)
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    async def _start_stdio(self) -> None:
+        if self._proc:
+            return
+        cmd = self.config.resolved_gateway_cmd()
+        self._proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._reader_task = asyncio.create_task(self._read_loop())
+        await self._request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "orchid", "version": "0.1"},
+            },
+        )
+
+    async def _read_loop(self) -> None:
+        assert self._proc and self._proc.stdout
+        while True:
+            line = await self._proc.stdout.readline()
+            if not line:
+                break
             try:
-                await self._stdio_cm.__aexit__(None, None, None)
-            except RuntimeError:
-                pass
-        if self._http_session_cm is not None:
-            try:
-                await self._http_session_cm.__aexit__(None, None, None)
-            except RuntimeError:
-                pass
-        if self._http_cm is not None:
-            try:
-                await self._http_cm.__aexit__(None, None, None)
-            except RuntimeError:
-                pass
+                payload = json.loads(line.decode("utf-8"))
+            except json.JSONDecodeError:
+                continue
+            if "id" in payload:
+                future = self._pending.pop(payload["id"], None)
+                if future and not future.done():
+                    future.set_result(payload)
 
+    async def _request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        if self.config.transport == "http":
+            return await self._request_http(method, params)
+        if not self._proc:
+            await self._start_stdio()
+        request_id = self._next_id()
+        payload = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        data = json.dumps(payload).encode("utf-8") + b"\n"
+        assert self._proc and self._proc.stdin
+        self._proc.stdin.write(data)
+        await self._proc.stdin.drain()
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future = loop.create_future()
+        self._pending[request_id] = future
+        try:
+            response = await asyncio.wait_for(future, timeout=self.config.request_timeout_s)
+        except asyncio.TimeoutError:
+            self._pending.pop(request_id, None)
+            raise
+        if "error" in response:
+            raise RuntimeError(response["error"])
+        return response.get("result", {})
 
-def stdio_gateway_from_env() -> tuple[str, list[str], dict[str, str] | None]:
-    command = os.getenv("MCP_GATEWAY_COMMAND", "docker")
-    args_env = os.getenv("MCP_GATEWAY_ARGS", "mcp gateway run")
-    args = shlex.split(args_env) if args_env else ["mcp", "gateway", "run"]
-    env: dict[str, str] = {}
-    allowed_paths = os.getenv("MCP_GATEWAY_ALLOWED_PATHS") or os.getenv("MCP_ALLOWED_PATHS")
-    if allowed_paths:
-        env["ALLOWED_PATHS"] = allowed_paths
-    return command, args, env or None
+    async def _request_http(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.config.http_url:
+            raise RuntimeError("HTTP transport selected but http_url is not configured")
+        payload = {"jsonrpc": "2.0", "id": self._next_id(), "method": method, "params": params}
+        async with httpx.AsyncClient(timeout=self.config.request_timeout_s) as client:
+            response = await client.post(self.config.http_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        if "error" in data:
+            raise RuntimeError(data["error"])
+        return data.get("result", {})
 
-
-def _validate_args(schema: dict[str, Any], arguments: dict[str, Any]) -> None:
-    try:
-        import jsonschema
-    except Exception as exc:  # noqa: BLE001
-        raise MCPGatewayError(f"jsonschema is required for tool validation: {exc}") from exc
-    try:
-        jsonschema.validate(arguments, schema)
-    except jsonschema.ValidationError as exc:
-        raise MCPGatewayError(f"Tool arguments failed validation: {exc.message}") from exc
+    def _next_id(self) -> int:
+        self._id_counter += 1
+        return self._id_counter

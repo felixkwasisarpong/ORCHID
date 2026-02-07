@@ -1,151 +1,162 @@
-"""LangGraph-style orchestrator implementation."""
+"""LangGraph-based orchestrator (state machine)."""
+
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable, List, Tuple, TypedDict
 
-from observability.trace_schema import RunCounters, RunTrace, StepResult
-from orchestrators.episode import (
-    SYSTEM_PROMPT,
+from observability.trace_schema import RunTrace, StepResult, TaskSpec, ToolRegistry
+from orchestrators.common import (
+    EpisodeConfig,
     build_messages,
-    build_repair_messages,
-    parse_step_action,
+    call_llm_for_action,
+    call_tool_with_retries,
 )
-from orchestrators.types import EpisodeConfig
-from runtimes import build_client
-from runtimes.base import RuntimeConfig
+from runtimes.base import RuntimeClient
 from tools.mcp_gateway_client import MCPGatewayClient
 
+try:
+    from langgraph.graph import END, StateGraph
+except Exception:  # noqa: BLE001
+    StateGraph = None
+    END = None
 
+
+class LGState(TypedDict):
+    history: List[StepResult]
+    step_index: int
+    llm_calls: int
+    tool_calls: int
+    retries: int
+    done: bool
+
+
+@dataclass
 class LangGraphEngine:
-    def __init__(
-        self,
-        runtime: RuntimeConfig,
-        mcp_client: MCPGatewayClient,
-        episode: EpisodeConfig,
-    ) -> None:
-        self.runtime = runtime
-        self.mcp_client = mcp_client
-        self.episode = episode
+    runtime: RuntimeClient
+    tool_client: MCPGatewayClient
+    validator: Callable[[Path], Tuple[bool, str]]
+    episode_config: EpisodeConfig
 
     async def run(
-        self,
-        run_id: str,
-        task_id: str,
-        description: str,
-        sandbox: Path,
-        validate: Callable[[Path], dict[str, Any]],
-        allowed_tool_names: list[str],
-        seed: int | None = None,
+        self, task: TaskSpec, sandbox_root: Path, seed: int, run_id: str, runtime_name: str
     ) -> RunTrace:
-        client = build_client(self.runtime)
-        counters = RunCounters()
-        steps: list[StepResult] = []
-        errors: list[str] = []
-        success = False
-        start = time.perf_counter()
-        tools = await self.mcp_client.list_tools()
-        allowed_tools = [tool for tool in tools if tool.name in allowed_tool_names] if allowed_tool_names else tools
-        if allowed_tool_names:
-            missing = sorted(set(allowed_tool_names) - {tool.name for tool in allowed_tools})
-            if missing:
-                errors.append(f"Missing required tools: {missing}")
+        if StateGraph is None:
+            raise RuntimeError("langgraph is not installed. Install langgraph to use this orchestrator.")
 
-        for step_index in range(self.episode.max_steps):
+        started_at = datetime.now(timezone.utc).isoformat()
+        start_ts = time.perf_counter()
+        tools = await self.tool_client.list_tools()
+        allowed_tools = [tool for tool in tools.tools if tool.name in task.allowed_tools]
+        tool_registry = ToolRegistry(tools=allowed_tools)
+
+        async def step_node(state: LGState) -> LGState:
+            step_index = state["step_index"]
             step_start = time.perf_counter()
-            messages = build_messages(
-                description,
-                str(sandbox),
-                allowed_tools,
-                steps,
-                self.episode.max_steps,
+            messages = build_messages(task, tool_registry, state["history"], sandbox_root)
+            action, llm_inc, llm_latency_ms, llm_retries = await call_llm_for_action(
+                self.runtime,
+                messages,
+                self.episode_config.max_llm_retries,
+                seed=seed,
             )
-            llm_retries = 0
-            action = None
-            llm_latency = None
-            while llm_retries <= self.episode.max_llm_retries:
-                llm_start = time.perf_counter()
-                response = await client.complete(messages, system_prompt=SYSTEM_PROMPT)
-                llm_latency = (time.perf_counter() - llm_start) * 1000.0
-                counters.llm_calls += 1
-                counters.total_latency_ms += llm_latency
-                try:
-                    action = parse_step_action(response.content)
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    llm_retries += 1
-                    counters.retries += 1
-                    if llm_retries > self.episode.max_llm_retries:
-                        errors.append(f"LLM output invalid: {exc}")
-                        action = None
-                        break
-                    messages = build_repair_messages(messages, response.content, str(exc))
+            state["llm_calls"] += llm_inc
+            state["retries"] += llm_retries
 
-            if action is None:
-                break
+            tool_latency_ms = 0.0
+            tool_result = None
+            error = None
+            tool_retries = 0
 
-            step_result = StepResult(step_index=step_index, action=action, llm_latency_ms=llm_latency)
-
-            if action.type == "tool_call":
-                tool_latency = None
-                tool_errors: list[str] = []
-                for attempt in range(self.episode.max_tool_retries + 1):
+            if action.action_type == "tool_call":
+                if action.tool_call is None:
+                    error = "tool_call missing"
+                elif action.tool_call.name not in task.allowed_tools:
+                    error = f"Tool {action.tool_call.name} not allowed"
+                else:
                     try:
-                        tool_start = time.perf_counter()
-                        tool_output = await self.mcp_client.call_tool(
+                        result, tool_inc, tool_latency_ms, tool_retries = await call_tool_with_retries(
+                            self.tool_client,
                             action.tool_call.name,
                             action.tool_call.arguments,
+                            self.episode_config.max_tool_retries,
+                            self.episode_config.tool_timeout_s,
                         )
-                        tool_latency = (time.perf_counter() - tool_start) * 1000.0
-                        counters.tool_calls += 1
-                        step_result.tool_result = tool_output
-                        break
+                        state["tool_calls"] += tool_inc
+                        state["retries"] += tool_retries
+                        tool_result = result
                     except Exception as exc:  # noqa: BLE001
-                        tool_errors.append(str(exc))
-                        counters.tool_calls += 1
-                        counters.retries += 1
-                        if attempt >= self.episode.max_tool_retries:
-                            errors.append(f"Tool call failed: {exc}")
-                if tool_errors:
-                    step_result.errors.extend(tool_errors)
-                step_result.tool_latency_ms = tool_latency
+                        error = str(exc)
 
-            validation_latency = None
-            try:
-                validation_start = time.perf_counter()
-                validation = validate(sandbox)
-                validation_latency = (time.perf_counter() - validation_start) * 1000.0
-                step_result.validation = validation
-                if validation.get("success") is True:
-                    success = True
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"Validation failed: {exc}")
+            validated, validation_error = self.validator(sandbox_root)
+            step_end = time.perf_counter()
 
-            step_result.validation_latency_ms = validation_latency
-            step_result.total_latency_ms = (time.perf_counter() - step_start) * 1000.0
-            steps.append(step_result)
+            step_result = StepResult(
+                step_index=step_index,
+                action=action,
+                tool_result=tool_result,
+                validated=validated,
+                validation_error=validation_error if not validated else None,
+                llm_latency_ms=llm_latency_ms,
+                tool_latency_ms=tool_latency_ms,
+                step_latency_ms=(step_end - step_start) * 1000,
+                error=error,
+                retries=llm_retries + tool_retries,
+            )
+            state["history"].append(step_result)
+            state["step_index"] += 1
 
-            if success or action.type == "finalize":
-                break
+            if validated or error or action.action_type == "finalize":
+                state["done"] = True
+            if state["step_index"] >= self.episode_config.max_steps:
+                state["done"] = True
+            return state
 
-        total_latency = (time.perf_counter() - start) * 1000.0
-        counters.total_latency_ms = total_latency
+        def route(state: LGState) -> str:
+            return END if state["done"] else "step"
 
-        trace = RunTrace(
+        graph = StateGraph(LGState)
+        graph.add_node("step", step_node)
+        graph.set_entry_point("step")
+        graph.add_conditional_edges("step", route, {"step": "step", END: END})
+
+        app = graph.compile()
+        init_state: LGState = {
+            "history": [],
+            "step_index": 0,
+            "llm_calls": 0,
+            "tool_calls": 0,
+            "retries": 0,
+            "done": False,
+        }
+        final_state = await app.ainvoke(init_state)
+        end_ts = time.perf_counter()
+        ended_at = datetime.now(timezone.utc).isoformat()
+
+        success = False
+        error_msg = None
+        if final_state["history"]:
+            success = final_state["history"][-1].validated
+            if final_state["history"][-1].error:
+                error_msg = final_state["history"][-1].error
+
+        return RunTrace(
             run_id=run_id,
             orchestrator="langgraph",
-            runtime=self.runtime.runtime.value,
-            model=self.runtime.model,
-            task_id=task_id,
+            runtime=runtime_name,
+            task_id=task.id,
             seed=seed,
-            steps=steps,
-            errors=errors,
+            started_at=started_at,
+            ended_at=ended_at,
+            total_latency_ms=(end_ts - start_ts) * 1000,
+            llm_calls=final_state["llm_calls"],
+            tool_calls=final_state["tool_calls"],
+            retries=final_state["retries"],
+            steps=final_state["history"],
             success=success,
-            counters=counters,
-            metadata={"sandbox": str(sandbox)},
+            error=error_msg,
+            fault_config={},
         )
-        trace.end_time = datetime.now(tz=timezone.utc).isoformat()
-        await client.close()
-        return trace

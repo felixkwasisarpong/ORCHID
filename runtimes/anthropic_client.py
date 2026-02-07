@@ -1,50 +1,53 @@
-"""Anthropic runtime client (cloud)."""
+"""Anthropic runtime client."""
+
 from __future__ import annotations
 
-from typing import Any
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 import httpx
 
-from runtimes.base import LLMResponse, Message, RuntimeConfig, normalize_model, resolve_api_key, resolve_base_url
+from runtimes.base import RuntimeClient, RuntimeConfig
 
 
-class AnthropicClient:
-    def __init__(self, config: RuntimeConfig) -> None:
-        self.config = config
-        self.base_url = resolve_base_url(config) or "https://api.anthropic.com"
-        self.model = normalize_model(config.runtime, config.model)
-        api_key = resolve_api_key(config)
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is required for Anthropic runtime")
-        self._client = httpx.AsyncClient(
-            base_url=self.base_url,
-            timeout=config.timeout_s,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-        )
+@dataclass
+class AnthropicClient(RuntimeClient):
+    config: RuntimeConfig
+    base_url: str = "https://api.anthropic.com/v1"
+    api_key: Optional[str] = None
+    anthropic_version: str = "2023-06-01"
 
-    async def complete(self, messages: list[Message], system_prompt: str | None = None) -> LLMResponse:
-        system = system_prompt or ""
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
+    async def chat(self, messages: List[Dict[str, Any]], seed: Optional[int] = None) -> str:
+        key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+        system_msg = None
+        rest_messages = []
+        for msg in messages:
+            if msg.get("role") == "system" and system_msg is None:
+                system_msg = msg.get("content")
+            else:
+                rest_messages.append(msg)
+
+        payload: Dict[str, Any] = {
+            "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
+            "messages": rest_messages,
         }
-        if system:
-            payload["system"] = system
-        payload.update(self.config.extra)
-
-        response = await self._client.post("/v1/messages", json=payload)
-        response.raise_for_status()
-        data = response.json()
-        content_blocks = data.get("content", [])
-        text_parts = [block.get("text", "") for block in content_blocks if block.get("type") == "text"]
-        content = "".join(text_parts)
-        usage = data.get("usage")
-        return LLMResponse(content=content, model=self.model, usage=usage)
-
-    async def close(self) -> None:
-        await self._client.aclose()
+        if system_msg:
+            payload["system"] = system_msg
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": self.anthropic_version,
+        }
+        async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
+            response = await client.post(f"{self.base_url}/messages", json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+        content = data.get("content", [])
+        if content:
+            return content[0].get("text", "")
+        return ""
