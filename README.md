@@ -27,7 +27,6 @@ Research-grade prototype for comparing three orchestrators over the same tool-ca
 - `observability/` JSONL traces and schemas
 - `docker/` Dockerfiles + Temporal compose
 
-Legacy scaffolding for earlier experiments remains in `orchestrator/`, `evaluation/`, and `api/`.
 
 ## Install
 ### Poetry

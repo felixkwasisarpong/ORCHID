@@ -12,7 +12,6 @@ packages = [
   { include = "harness" },
   { include = "workers" },
   { include = "tools" },
-  { include = "evaluation" },
   { include = "observability" },
   { include = "api" }
 ]

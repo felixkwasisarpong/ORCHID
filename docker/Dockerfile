@@ -10,7 +10,6 @@ COPY benchmarks /app/benchmarks
 COPY harness /app/harness
 COPY workers /app/workers
 COPY tools /app/tools
-COPY evaluation /app/evaluation
 COPY observability /app/observability
 COPY api /app/api
 
