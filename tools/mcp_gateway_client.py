@@ -35,6 +35,7 @@ class MCPGatewayClient:
         self.config = config
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._reader_task: Optional[asyncio.Task] = None
+        self._stderr_task: Optional[asyncio.Task] = None
         self._pending: Dict[int, asyncio.Future] = {}
         self._id_counter = 0
         self._tool_registry: Optional[ToolRegistry] = None
@@ -48,16 +49,23 @@ class MCPGatewayClient:
         await self.close()
 
     async def close(self) -> None:
-        if self._reader_task:
-            self._reader_task.cancel()
-            self._reader_task = None
-        if self._proc:
-            self._proc.terminate()
-            try:
-                await asyncio.wait_for(self._proc.wait(), timeout=3)
-            except asyncio.TimeoutError:
-                self._proc.kill()
-            self._proc = None
+        self._reject_pending(RuntimeError("MCP client closed"))
+        proc = self._proc
+        self._proc = None
+        if proc:
+            if proc.stdin and not proc.stdin.is_closing():
+                proc.stdin.close()
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+        await self._cancel_task(self._reader_task)
+        await self._cancel_task(self._stderr_task)
+        self._reader_task = None
+        self._stderr_task = None
 
     async def list_tools(self) -> ToolRegistry:
         if self._tool_registry is not None:
@@ -107,6 +115,7 @@ class MCPGatewayClient:
             stderr=asyncio.subprocess.PIPE,
         )
         self._reader_task = asyncio.create_task(self._read_loop())
+        self._stderr_task = asyncio.create_task(self._stderr_loop())
         await self._request(
             "initialize",
             {
@@ -119,7 +128,10 @@ class MCPGatewayClient:
     async def _read_loop(self) -> None:
         assert self._proc and self._proc.stdout
         while True:
-            line = await self._proc.stdout.readline()
+            try:
+                line = await self._proc.stdout.readline()
+            except asyncio.CancelledError:
+                return
             if not line:
                 break
             try:
@@ -130,6 +142,17 @@ class MCPGatewayClient:
                 future = self._pending.pop(payload["id"], None)
                 if future and not future.done():
                     future.set_result(payload)
+        self._reject_pending(RuntimeError("MCP subprocess ended"))
+
+    async def _stderr_loop(self) -> None:
+        assert self._proc and self._proc.stderr
+        while True:
+            try:
+                line = await self._proc.stderr.readline()
+            except asyncio.CancelledError:
+                return
+            if not line:
+                break
 
     async def _request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if self.config.transport == "http":
@@ -138,13 +161,13 @@ class MCPGatewayClient:
             await self._start_stdio()
         request_id = self._next_id()
         payload = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._pending[request_id] = future
         data = json.dumps(payload).encode("utf-8") + b"\n"
         assert self._proc and self._proc.stdin
         self._proc.stdin.write(data)
         await self._proc.stdin.drain()
-        loop = asyncio.get_event_loop()
-        future: asyncio.Future = loop.create_future()
-        self._pending[request_id] = future
         try:
             response = await asyncio.wait_for(future, timeout=self.config.request_timeout_s)
         except asyncio.TimeoutError:
@@ -189,3 +212,18 @@ class MCPGatewayClient:
         if value.startswith(f"{source_root}/"):
             return f"{target_root}{value[len(source_root):]}"
         return value
+
+    def _reject_pending(self, exc: Exception) -> None:
+        for future in list(self._pending.values()):
+            if not future.done():
+                future.set_exception(exc)
+        self._pending.clear()
+
+    async def _cancel_task(self, task: Optional[asyncio.Task]) -> None:
+        if not task:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
