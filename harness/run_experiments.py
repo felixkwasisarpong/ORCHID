@@ -128,8 +128,13 @@ async def run_once(
     )
 
     gateway_cmd = None
+    path_rewrite_from = None
+    path_rewrite_to = None
     if config.gateway_cmd:
         gateway_cmd = [arg.format(sandbox_root=str(sandbox_root)) for arg in config.gateway_cmd]
+        if any("/local-directory" in arg for arg in gateway_cmd):
+            path_rewrite_from = str(sandbox_root)
+            path_rewrite_to = "/local-directory"
 
     mcp_config = MCPClientConfig(
         transport=config.transport,
@@ -138,6 +143,8 @@ async def run_once(
         request_timeout_s=episode_config.tool_timeout_s,
         latency_ms=config.faults.latency_ms,
         jitter_ms=config.faults.jitter_ms,
+        path_rewrite_from=path_rewrite_from,
+        path_rewrite_to=path_rewrite_to,
     )
 
     trace_path = default_trace_path(results_dir, run_id)

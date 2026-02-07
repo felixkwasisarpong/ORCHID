@@ -21,6 +21,8 @@ class MCPClientConfig:
     request_timeout_s: float = 10.0
     latency_ms: float = 0.0
     jitter_ms: float = 0.0
+    path_rewrite_from: Optional[str] = None
+    path_rewrite_to: Optional[str] = None
 
     def resolved_gateway_cmd(self) -> list[str]:
         if self.gateway_cmd:
@@ -78,10 +80,11 @@ class MCPGatewayClient:
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         await self._apply_latency()
+        rewritten_arguments = self._rewrite_arguments(arguments)
         try:
-            return await self._request("tools/call", {"name": name, "arguments": arguments})
+            return await self._request("tools/call", {"name": name, "arguments": rewritten_arguments})
         except Exception:  # noqa: BLE001
-            return await self._request("tools.call", {"name": name, "arguments": arguments})
+            return await self._request("tools.call", {"name": name, "arguments": rewritten_arguments})
 
     async def _apply_latency(self) -> None:
         if self.config.latency_ms <= 0 and self.config.jitter_ms <= 0:
@@ -166,3 +169,23 @@ class MCPGatewayClient:
     def _next_id(self) -> int:
         self._id_counter += 1
         return self._id_counter
+
+    def _rewrite_arguments(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: self._rewrite_arguments(inner) for key, inner in value.items()}
+        if isinstance(value, list):
+            return [self._rewrite_arguments(item) for item in value]
+        if not isinstance(value, str):
+            return value
+
+        source_root = self.config.path_rewrite_from
+        target_root = self.config.path_rewrite_to
+        if not source_root or not target_root:
+            return value
+
+        source_root = source_root.rstrip("/")
+        if value == source_root:
+            return target_root
+        if value.startswith(f"{source_root}/"):
+            return f"{target_root}{value[len(source_root):]}"
+        return value
