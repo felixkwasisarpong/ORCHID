@@ -72,7 +72,7 @@ def task_01_count_lines() -> TaskDefinition:
     )
 
     def setup(root: Path) -> None:
-        _write_text(root / "data/input.txt", "alpha\nbeta\ngamma\n")
+        _write_text(root / "data/input.txt", "alpha\nbeta\ngamma")
 
     def validate(root: Path) -> Tuple[bool, str]:
         return _validate_text(root / "output/line_count.txt", "3")

@@ -11,6 +11,8 @@ seeds:
 max_steps: 6
 max_llm_retries: 1
 max_tool_retries: 0
+timeout_s: 120.0
+tool_timeout_s: 20.0
 results_dir: ${HOST_PWD}/evaluation/results
 sandbox_dir: ${HOST_PWD}/evaluation/sandboxes
 transport: stdio

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, Tuple
+from typing import Any, Callable, List, Tuple
 
 from observability.trace_schema import RunTrace, StepAction, StepResult, TaskSpec, ToolRegistry
 from orchestrators.common import (
@@ -29,20 +31,23 @@ except Exception:  # noqa: BLE001
     Task = None
 
 
-class CrewRuntimeAdapter:
-    def __init__(self, runtime: RuntimeClient, seed: int) -> None:
-        self.runtime = runtime
-        self.seed = seed
-        self.llm_calls = 0
-        self.total_latency_ms = 0.0
+def _crewai_llm_model(runtime_name: str, runtime: RuntimeClient) -> str:
+    model = runtime.config.model
+    if runtime_name == "ollama":
+        return f"ollama/{model}"
+    if runtime_name == "anthropic":
+        return f"anthropic/{model}"
+    return model
 
-    def __call__(self, prompt: str, **kwargs) -> str:  # type: ignore[override]
-        start = time.perf_counter()
-        result = asyncio.run(self.runtime.chat([{"role": "user", "content": prompt}], seed=self.seed))
-        end = time.perf_counter()
-        self.llm_calls += 1
-        self.total_latency_ms += (end - start) * 1000
-        return result
+
+def _extract_crew_output_text(output: Any) -> str:
+    if isinstance(output, str):
+        return output
+    for attr in ("raw", "output", "result"):
+        value = getattr(output, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    return str(output)
 
 
 @dataclass
@@ -57,6 +62,24 @@ class CrewAIEngine:
     ) -> RunTrace:
         if Agent is None:
             raise RuntimeError("crewai is not installed. Install crewai to use this orchestrator.")
+        os.environ["CREWAI_TRACING_ENABLED"] = "false"
+        os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
+        os.environ["CREWAI_TESTING"] = "true"
+        os.environ["LITELLM_LOG"] = "CRITICAL"
+        if runtime_name == "ollama":
+            os.environ["OLLAMA_API_BASE"] = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        # CrewAI routes through LiteLLM; silence proxy-related logger noise in harness runs.
+        try:
+            import litellm
+            from litellm.litellm_core_utils import litellm_logging as litellm_logging_mod
+
+            litellm.suppress_debug_info = True
+            litellm.verbose_logger.disabled = True
+            litellm.verbose_logger.setLevel(logging.CRITICAL)
+            litellm_logging_mod.verbose_logger.disabled = True
+            litellm_logging_mod.verbose_logger.setLevel(logging.CRITICAL)
+        except Exception:  # noqa: BLE001
+            pass
 
         started_at = datetime.now(timezone.utc).isoformat()
         start_ts = time.perf_counter()
@@ -74,20 +97,26 @@ class CrewAIEngine:
             messages = build_messages(task, tool_registry, history, sandbox_root)
             prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
 
-            adapter = CrewRuntimeAdapter(self.runtime, seed)
+            llm_model = _crewai_llm_model(runtime_name, self.runtime)
             planner = Agent(
                 role="Planner",
                 goal="Propose the next StepAction JSON.",
                 backstory="Expert at planning tool usage.",
-                llm=adapter,
+                llm=llm_model,
                 verbose=False,
+                max_iter=1,
+                max_retry_limit=0,
+                allow_delegation=False,
             )
             critic = Agent(
                 role="Critic",
                 goal="Validate and correct the StepAction JSON.",
                 backstory="Ensures strict schema compliance.",
-                llm=adapter,
+                llm=llm_model,
                 verbose=False,
+                max_iter=1,
+                max_retry_limit=0,
+                allow_delegation=False,
             )
 
             plan_task = Task(
@@ -111,9 +140,11 @@ class CrewAIEngine:
                 verbose=False,
             )
 
-            crew_output = str(await asyncio.to_thread(crew.kickoff))
-            llm_calls += adapter.llm_calls
-            llm_latency_ms = adapter.total_latency_ms
+            llm_start = time.perf_counter()
+            crew_output = await asyncio.to_thread(crew.kickoff)
+            llm_end = time.perf_counter()
+            llm_calls += 2
+            llm_latency_ms = (llm_end - llm_start) * 1000
             llm_retries = 0
 
             tool_latency_ms = 0.0
@@ -124,7 +155,7 @@ class CrewAIEngine:
             try:
                 # Attempt to parse crew output first; fallback to repair loop if invalid.
                 try:
-                    action = StepAction.model_validate(json.loads(crew_output))
+                    action = StepAction.model_validate(json.loads(_extract_crew_output_text(crew_output)))
                 except Exception:  # noqa: BLE001
                     action, llm_inc, llm_latency_ms2, llm_retries = await call_llm_for_action(
                         self.runtime,

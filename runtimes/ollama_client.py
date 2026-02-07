@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -16,6 +17,7 @@ class OllamaClient(RuntimeClient):
     base_url: str = "http://localhost:11434"
 
     async def chat(self, messages: List[Dict[str, Any]], seed: Optional[int] = None) -> str:
+        base_url = os.getenv("OLLAMA_BASE_URL", self.base_url)
         payload: Dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
@@ -28,7 +30,7 @@ class OllamaClient(RuntimeClient):
         if seed is not None:
             payload["options"]["seed"] = seed
         async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
-            response = await client.post(f"{self.base_url}/api/chat", json=payload)
+            response = await client.post(f"{base_url}/api/chat", json=payload)
             response.raise_for_status()
             data = response.json()
         return data.get("message", {}).get("content", "")

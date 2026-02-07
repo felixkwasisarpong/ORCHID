@@ -75,6 +75,8 @@ Rules:
 - If more tool work is needed, choose action_type=tool_call.
 - If you believe the goal is satisfied, choose action_type=finalize and explain briefly in final_answer.
 - Use only allowed tool names.
+- Before write operations, ensure parent directories exist.
+- Unless explicitly requested, write plain text outputs (not JSON wrappers).
 - Output JSON only, no extra text.
 """.strip()
 
@@ -139,6 +141,9 @@ async def call_tool_with_retries(
             t1 = time.perf_counter()
             tool_calls += 1
             total_latency_ms += (t1 - t0) * 1000
+            tool_error = extract_tool_error(result)
+            if tool_error:
+                raise RuntimeError(tool_error)
             return result, tool_calls, total_latency_ms, retries
         except Exception as exc:  # noqa: BLE001
             t1 = time.perf_counter()
@@ -150,6 +155,24 @@ async def call_tool_with_retries(
             retries += 1
 
     raise RuntimeError(f"Tool call failed after retries: {last_error}")
+
+
+def extract_tool_error(result: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(result, dict):
+        return None
+    if not result.get("isError"):
+        return None
+    content = result.get("content")
+    if isinstance(content, list):
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_parts.append(text.strip())
+        if text_parts:
+            return " | ".join(text_parts)
+    return "Tool returned isError=true"
 
 
 async def run_step_loop(

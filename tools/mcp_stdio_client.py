@@ -167,7 +167,11 @@ class MCPStdioClient:
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         await self._request_with_retry(
             ["initialize"],
-            {"protocolVersion": self.config.protocol_version, "clientInfo": {"name": self.config.client_name, "version": self.config.client_version}},
+            {
+                "protocolVersion": self.config.protocol_version,
+                "clientInfo": {"name": self.config.client_name, "version": self.config.client_version},
+                "capabilities": {},
+            },
             "initialize",
             allow_restart=False,
         )
