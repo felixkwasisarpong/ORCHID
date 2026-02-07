@@ -1,7 +1,5 @@
 orchestrators:
   - langgraph
-  - crewai
-  - autogen
 runtimes:
   - ollama
 tasks:
