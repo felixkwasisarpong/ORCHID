@@ -14,8 +14,25 @@ class RuntimeConfig:
     timeout_s: float = 20.0
 
 
+@dataclass
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cached_prompt_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
+@dataclass
+class ChatResult:
+    content: str
+    usage: TokenUsage
+    cost_usd: float = 0.0
+
+
 class RuntimeClient(Protocol):
     config: RuntimeConfig
 
-    async def chat(self, messages: List[Dict[str, Any]], seed: int | None = None) -> str:
+    async def chat(self, messages: List[Dict[str, Any]], seed: int | None = None) -> ChatResult:
         ...

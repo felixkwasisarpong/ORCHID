@@ -34,6 +34,10 @@ class StepResult(BaseModel):
     validated: bool = False
     validation_error: Optional[str] = None
     llm_latency_ms: float = 0.0
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
+    llm_total_tokens: int = 0
+    llm_cost_usd: float = 0.0
     tool_latency_ms: float = 0.0
     step_latency_ms: float = 0.0
     error: Optional[str] = None
@@ -63,6 +67,10 @@ class RunTrace(BaseModel):
     llm_calls: int
     tool_calls: int
     retries: int
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
+    llm_total_tokens: int = 0
+    llm_cost_usd: float = 0.0
     steps: List[StepResult]
     success: bool
     error: Optional[str] = None

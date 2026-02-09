@@ -232,6 +232,10 @@ def write_summary(traces: List[RunTrace], results_dir: Path) -> Path:
                 "llm_calls",
                 "tool_calls",
                 "retries",
+                "llm_prompt_tokens",
+                "llm_completion_tokens",
+                "llm_total_tokens",
+                "llm_cost_usd",
                 "total_latency_ms",
             ]
         )
@@ -247,6 +251,10 @@ def write_summary(traces: List[RunTrace], results_dir: Path) -> Path:
                     trace.llm_calls,
                     trace.tool_calls,
                     trace.retries,
+                    trace.llm_prompt_tokens,
+                    trace.llm_completion_tokens,
+                    trace.llm_total_tokens,
+                    f"{trace.llm_cost_usd:.8f}",
                     f"{trace.total_latency_ms:.2f}",
                 ]
             )

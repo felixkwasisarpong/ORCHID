@@ -35,6 +35,10 @@ class AutoGenMetrics:
     def __init__(self) -> None:
         self.llm_calls = 0
         self.total_latency_ms = 0.0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+        self.cost_usd = 0.0
 
 
 class RuntimeConversableAgent:  # lightweight wrapper around AutoGen if available
@@ -53,9 +57,13 @@ class RuntimeConversableAgent:  # lightweight wrapper around AutoGen if availabl
         end = time.perf_counter()
         self.metrics.llm_calls += 1
         self.metrics.total_latency_ms += (end - start) * 1000
+        self.metrics.prompt_tokens += result.usage.prompt_tokens
+        self.metrics.completion_tokens += result.usage.completion_tokens
+        self.metrics.total_tokens += result.usage.total_tokens
+        self.metrics.cost_usd += result.cost_usd
         if TextMessage is not None:
-            self.transcript.append(TextMessage(content=result, source=self.name))
-        return result
+            self.transcript.append(TextMessage(content=result.content, source=self.name))
+        return result.content
 
 
 @dataclass
@@ -83,6 +91,10 @@ class AutoGenEngine:
         llm_calls = 0
         tool_calls = 0
         retries = 0
+        llm_prompt_tokens = 0
+        llm_completion_tokens = 0
+        llm_total_tokens = 0
+        llm_cost_usd = 0.0
 
         for step_index in range(self.episode_config.max_steps):
             step_start = time.perf_counter()
@@ -100,6 +112,10 @@ class AutoGenEngine:
             llm_calls += metrics.llm_calls
             llm_latency_ms = metrics.total_latency_ms
             llm_retries = 0
+            step_prompt_tokens = metrics.prompt_tokens
+            step_completion_tokens = metrics.completion_tokens
+            step_total_tokens = metrics.total_tokens
+            step_cost_usd = metrics.cost_usd
 
             tool_latency_ms = 0.0
             tool_result = None
@@ -110,18 +126,28 @@ class AutoGenEngine:
                 try:
                     action = StepAction.model_validate(json.loads(critic_output))
                 except Exception:  # noqa: BLE001
-                    action, llm_inc, llm_latency_ms2, llm_retries = await call_llm_for_action(
+                    action, llm_metrics = await call_llm_for_action(
                         self.runtime,
                         messages,
                         self.episode_config.max_llm_retries,
                         seed=seed,
                     )
-                    llm_calls += llm_inc
-                    llm_latency_ms += llm_latency_ms2
-                    retries += llm_retries
+                    llm_calls += llm_metrics.llm_calls
+                    llm_latency_ms += llm_metrics.latency_ms
+                    retries += llm_metrics.retries
+                    llm_retries = llm_metrics.retries
+                    step_prompt_tokens += llm_metrics.usage.prompt_tokens
+                    step_completion_tokens += llm_metrics.usage.completion_tokens
+                    step_total_tokens += llm_metrics.usage.total_tokens
+                    step_cost_usd += llm_metrics.cost_usd
             except Exception as exc:  # noqa: BLE001
                 error = str(exc)
                 break
+
+            llm_prompt_tokens += step_prompt_tokens
+            llm_completion_tokens += step_completion_tokens
+            llm_total_tokens += step_total_tokens
+            llm_cost_usd += step_cost_usd
 
             if action.action_type == "tool_call":
                 if action.tool_call is None:
@@ -153,6 +179,10 @@ class AutoGenEngine:
                 validated=validated,
                 validation_error=validation_error if not validated else None,
                 llm_latency_ms=llm_latency_ms,
+                llm_prompt_tokens=step_prompt_tokens,
+                llm_completion_tokens=step_completion_tokens,
+                llm_total_tokens=step_total_tokens,
+                llm_cost_usd=step_cost_usd,
                 tool_latency_ms=tool_latency_ms,
                 step_latency_ms=(step_end - step_start) * 1000,
                 error=error,
@@ -184,6 +214,10 @@ class AutoGenEngine:
             llm_calls=llm_calls,
             tool_calls=tool_calls,
             retries=retries,
+            llm_prompt_tokens=llm_prompt_tokens,
+            llm_completion_tokens=llm_completion_tokens,
+            llm_total_tokens=llm_total_tokens,
+            llm_cost_usd=llm_cost_usd,
             steps=history,
             success=success,
             error=error_msg,

@@ -31,6 +31,10 @@ class LGState(TypedDict):
     llm_calls: int
     tool_calls: int
     retries: int
+    llm_prompt_tokens: int
+    llm_completion_tokens: int
+    llm_total_tokens: int
+    llm_cost_usd: float
     done: bool
 
 
@@ -57,14 +61,18 @@ class LangGraphEngine:
             step_index = state["step_index"]
             step_start = time.perf_counter()
             messages = build_messages(task, tool_registry, state["history"], sandbox_root)
-            action, llm_inc, llm_latency_ms, llm_retries = await call_llm_for_action(
+            action, llm_metrics = await call_llm_for_action(
                 self.runtime,
                 messages,
                 self.episode_config.max_llm_retries,
                 seed=seed,
             )
-            state["llm_calls"] += llm_inc
-            state["retries"] += llm_retries
+            state["llm_calls"] += llm_metrics.llm_calls
+            state["retries"] += llm_metrics.retries
+            state["llm_prompt_tokens"] += llm_metrics.usage.prompt_tokens
+            state["llm_completion_tokens"] += llm_metrics.usage.completion_tokens
+            state["llm_total_tokens"] += llm_metrics.usage.total_tokens
+            state["llm_cost_usd"] += llm_metrics.cost_usd
 
             tool_latency_ms = 0.0
             tool_result = None
@@ -100,11 +108,15 @@ class LangGraphEngine:
                 tool_result=tool_result,
                 validated=validated,
                 validation_error=validation_error if not validated else None,
-                llm_latency_ms=llm_latency_ms,
+                llm_latency_ms=llm_metrics.latency_ms,
+                llm_prompt_tokens=llm_metrics.usage.prompt_tokens,
+                llm_completion_tokens=llm_metrics.usage.completion_tokens,
+                llm_total_tokens=llm_metrics.usage.total_tokens,
+                llm_cost_usd=llm_metrics.cost_usd,
                 tool_latency_ms=tool_latency_ms,
                 step_latency_ms=(step_end - step_start) * 1000,
                 error=error,
-                retries=llm_retries + tool_retries,
+                retries=llm_metrics.retries + tool_retries,
             )
             state["history"].append(step_result)
             state["step_index"] += 1
@@ -130,6 +142,10 @@ class LangGraphEngine:
             "llm_calls": 0,
             "tool_calls": 0,
             "retries": 0,
+            "llm_prompt_tokens": 0,
+            "llm_completion_tokens": 0,
+            "llm_total_tokens": 0,
+            "llm_cost_usd": 0.0,
             "done": False,
         }
         final_state = await app.ainvoke(init_state)
@@ -155,6 +171,10 @@ class LangGraphEngine:
             llm_calls=final_state["llm_calls"],
             tool_calls=final_state["tool_calls"],
             retries=final_state["retries"],
+            llm_prompt_tokens=final_state["llm_prompt_tokens"],
+            llm_completion_tokens=final_state["llm_completion_tokens"],
+            llm_total_tokens=final_state["llm_total_tokens"],
+            llm_cost_usd=final_state["llm_cost_usd"],
             steps=final_state["history"],
             success=success,
             error=error_msg,

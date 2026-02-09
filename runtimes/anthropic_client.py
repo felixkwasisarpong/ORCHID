@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from runtimes.base import RuntimeClient, RuntimeConfig
+from runtimes.base import ChatResult, RuntimeClient, RuntimeConfig, TokenUsage
+from runtimes.pricing import estimate_cost_usd
 
 
 @dataclass
@@ -18,7 +19,7 @@ class AnthropicClient(RuntimeClient):
     api_key: Optional[str] = None
     anthropic_version: str = "2023-06-01"
 
-    async def chat(self, messages: List[Dict[str, Any]], seed: Optional[int] = None) -> str:
+    async def chat(self, messages: List[Dict[str, Any]], seed: Optional[int] = None) -> ChatResult:
         key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
         if not key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set")
@@ -47,7 +48,24 @@ class AnthropicClient(RuntimeClient):
             response = await client.post(f"{self.base_url}/messages", json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
+        usage_data = data.get("usage", {}) or {}
+        prompt_tokens = int(usage_data.get("input_tokens", 0) or 0)
+        completion_tokens = int(usage_data.get("output_tokens", 0) or 0)
+        total_tokens = prompt_tokens + completion_tokens
+        usage = TokenUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cache_creation_input_tokens=int(usage_data.get("cache_creation_input_tokens", 0) or 0),
+            cache_read_input_tokens=int(usage_data.get("cache_read_input_tokens", 0) or 0),
+        )
         content = data.get("content", [])
         if content:
-            return content[0].get("text", "")
-        return ""
+            text = content[0].get("text", "")
+        else:
+            text = ""
+        return ChatResult(
+            content=text,
+            usage=usage,
+            cost_usd=estimate_cost_usd("anthropic", self.config.model, usage),
+        )

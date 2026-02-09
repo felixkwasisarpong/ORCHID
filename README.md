@@ -111,6 +111,23 @@ docker compose -f docker/compose.harness.yml down
 
 Each trace includes consistent counters (`llm_calls`, `tool_calls`, `retries`, `total_latency_ms`) and per-step timings.
 
+## Token Cost Accounting
+
+Run traces and summary CSV now include:
+- `llm_prompt_tokens`
+- `llm_completion_tokens`
+- `llm_total_tokens`
+- `llm_cost_usd`
+
+Pricing is estimated from provider list prices per 1M tokens:
+- OpenAI pricing reference: https://openai.com/api/pricing/
+- Anthropic pricing reference: https://www.anthropic.com/pricing
+
+Notes:
+- Ollama is always recorded as `llm_cost_usd = 0.0`.
+- Cost is computed from token usage returned by the provider APIs.
+- If a model is unknown to the local pricing map, cost falls back to `0.0` until you add a rate in `runtimes/pricing.py`.
+
 ## Configuration Notes
 
 - Edit `configs/default.yaml` to change models, max steps, retries, or fault injection.

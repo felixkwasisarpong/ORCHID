@@ -91,6 +91,10 @@ class CrewAIEngine:
         llm_calls = 0
         tool_calls = 0
         retries = 0
+        llm_prompt_tokens = 0
+        llm_completion_tokens = 0
+        llm_total_tokens = 0
+        llm_cost_usd = 0.0
         use_crewai = os.getenv("ORCHID_CREWAI_NATIVE", "0").lower() in {"1", "true", "yes"}
         crewai_timeout_s = min(self.episode_config.timeout_s, 5.0)
 
@@ -144,6 +148,10 @@ class CrewAIEngine:
             llm_start = time.perf_counter()
             llm_latency_ms = 0.0
             llm_retries = 0
+            step_prompt_tokens = 0
+            step_completion_tokens = 0
+            step_total_tokens = 0
+            step_cost_usd = 0.0
             action = None
             error = None
             if use_crewai and crew is not None:
@@ -166,15 +174,20 @@ class CrewAIEngine:
 
             if action is None:
                 try:
-                    action, llm_inc, llm_latency_ms2, llm_retries = await call_llm_for_action(
+                    action, llm_metrics = await call_llm_for_action(
                         self.runtime,
                         messages,
                         self.episode_config.max_llm_retries,
                         seed=seed,
                     )
-                    llm_calls += llm_inc
-                    llm_latency_ms += llm_latency_ms2
-                    retries += llm_retries
+                    llm_calls += llm_metrics.llm_calls
+                    llm_latency_ms += llm_metrics.latency_ms
+                    retries += llm_metrics.retries
+                    llm_retries = llm_metrics.retries
+                    step_prompt_tokens += llm_metrics.usage.prompt_tokens
+                    step_completion_tokens += llm_metrics.usage.completion_tokens
+                    step_total_tokens += llm_metrics.usage.total_tokens
+                    step_cost_usd += llm_metrics.cost_usd
                 except Exception as exc:  # noqa: BLE001
                     llm_end = time.perf_counter()
                     llm_latency_ms = (llm_end - llm_start) * 1000
@@ -210,6 +223,11 @@ class CrewAIEngine:
             if action is None:
                 break
 
+            llm_prompt_tokens += step_prompt_tokens
+            llm_completion_tokens += step_completion_tokens
+            llm_total_tokens += step_total_tokens
+            llm_cost_usd += step_cost_usd
+
             step_result = StepResult(
                 step_index=step_index,
                 action=action,
@@ -217,6 +235,10 @@ class CrewAIEngine:
                 validated=validated,
                 validation_error=validation_error if not validated else None,
                 llm_latency_ms=llm_latency_ms,
+                llm_prompt_tokens=step_prompt_tokens,
+                llm_completion_tokens=step_completion_tokens,
+                llm_total_tokens=step_total_tokens,
+                llm_cost_usd=step_cost_usd,
                 tool_latency_ms=tool_latency_ms,
                 step_latency_ms=(step_end - step_start) * 1000,
                 error=error,
@@ -248,6 +270,10 @@ class CrewAIEngine:
             llm_calls=llm_calls,
             tool_calls=tool_calls,
             retries=retries,
+            llm_prompt_tokens=llm_prompt_tokens,
+            llm_completion_tokens=llm_completion_tokens,
+            llm_total_tokens=llm_total_tokens,
+            llm_cost_usd=llm_cost_usd,
             steps=history,
             success=success,
             error=error_msg,
