@@ -91,72 +91,81 @@ class CrewAIEngine:
         llm_calls = 0
         tool_calls = 0
         retries = 0
+        use_crewai = os.getenv("ORCHID_CREWAI_NATIVE", "0").lower() in {"1", "true", "yes"}
+        crewai_timeout_s = min(self.episode_config.timeout_s, 5.0)
 
         for step_index in range(self.episode_config.max_steps):
             step_start = time.perf_counter()
             messages = build_messages(task, tool_registry, history, sandbox_root)
-            prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
-
-            llm_model = _crewai_llm_model(runtime_name, self.runtime)
-            planner = Agent(
-                role="Planner",
-                goal="Propose the next StepAction JSON.",
-                backstory="Expert at planning tool usage.",
-                llm=llm_model,
-                verbose=False,
-                max_iter=1,
-                max_retry_limit=0,
-                allow_delegation=False,
-            )
-            critic = Agent(
-                role="Critic",
-                goal="Validate and correct the StepAction JSON.",
-                backstory="Ensures strict schema compliance.",
-                llm=llm_model,
-                verbose=False,
-                max_iter=1,
-                max_retry_limit=0,
-                allow_delegation=False,
-            )
-
-            plan_task = Task(
-                description=f"Use the context to propose a StepAction JSON.\n\n{prompt_text}",
-                expected_output="Valid StepAction JSON only.",
-                agent=planner,
-            )
-            critique_task = Task(
-                description=(
-                    "Review the planner's output and return a corrected StepAction JSON only. "
-                    f"\n\nContext:\n{prompt_text}"
-                ),
-                expected_output="Valid StepAction JSON only.",
-                agent=critic,
-            )
-
-            crew = Crew(
-                agents=[planner, critic],
-                tasks=[plan_task, critique_task],
-                process=Process.sequential,
-                verbose=False,
-            )
+            crew = None
+            if use_crewai:
+                prompt_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
+                llm_model = _crewai_llm_model(runtime_name, self.runtime)
+                planner = Agent(
+                    role="Planner",
+                    goal="Propose the next StepAction JSON.",
+                    backstory="Expert at planning tool usage.",
+                    llm=llm_model,
+                    verbose=False,
+                    max_iter=1,
+                    max_retry_limit=0,
+                    allow_delegation=False,
+                )
+                critic = Agent(
+                    role="Critic",
+                    goal="Validate and correct the StepAction JSON.",
+                    backstory="Ensures strict schema compliance.",
+                    llm=llm_model,
+                    verbose=False,
+                    max_iter=1,
+                    max_retry_limit=0,
+                    allow_delegation=False,
+                )
+                plan_task = Task(
+                    description=f"Use the context to propose a StepAction JSON.\n\n{prompt_text}",
+                    expected_output="Valid StepAction JSON only.",
+                    agent=planner,
+                )
+                critique_task = Task(
+                    description=(
+                        "Review the planner's output and return a corrected StepAction JSON only. "
+                        f"\n\nContext:\n{prompt_text}"
+                    ),
+                    expected_output="Valid StepAction JSON only.",
+                    agent=critic,
+                )
+                crew = Crew(
+                    agents=[planner, critic],
+                    tasks=[plan_task, critique_task],
+                    process=Process.sequential,
+                    verbose=False,
+                )
 
             llm_start = time.perf_counter()
-            crew_output = await asyncio.to_thread(crew.kickoff)
-            llm_end = time.perf_counter()
-            llm_calls += 2
-            llm_latency_ms = (llm_end - llm_start) * 1000
+            llm_latency_ms = 0.0
             llm_retries = 0
-
-            tool_latency_ms = 0.0
-            tool_result = None
+            action = None
             error = None
-            tool_retries = 0
-
-            try:
-                # Attempt to parse crew output first; fallback to repair loop if invalid.
+            if use_crewai and crew is not None:
                 try:
+                    crew_output = await asyncio.wait_for(
+                        asyncio.to_thread(crew.kickoff),
+                        timeout=crewai_timeout_s,
+                    )
+                    llm_end = time.perf_counter()
+                    llm_calls += 2
+                    llm_latency_ms = (llm_end - llm_start) * 1000
                     action = StepAction.model_validate(json.loads(_extract_crew_output_text(crew_output)))
+                except asyncio.TimeoutError:
+                    # CrewAI can hang for some prompts; disable it for the rest of this run.
+                    use_crewai = False
+                    retries += 1
                 except Exception:  # noqa: BLE001
+                    # Invalid/failed crew output falls back to direct structured call.
+                    pass
+
+            if action is None:
+                try:
                     action, llm_inc, llm_latency_ms2, llm_retries = await call_llm_for_action(
                         self.runtime,
                         messages,
@@ -166,9 +175,14 @@ class CrewAIEngine:
                     llm_calls += llm_inc
                     llm_latency_ms += llm_latency_ms2
                     retries += llm_retries
-            except Exception as exc:  # noqa: BLE001
-                error = str(exc)
-                action = None
+                except Exception as exc:  # noqa: BLE001
+                    llm_end = time.perf_counter()
+                    llm_latency_ms = (llm_end - llm_start) * 1000
+                    error = str(exc)
+
+            tool_latency_ms = 0.0
+            tool_result = None
+            tool_retries = 0
 
             if action and action.action_type == "tool_call":
                 if action.tool_call is None:
