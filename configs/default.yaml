@@ -24,12 +24,13 @@ gateway_cmd:
   - --rm
   - -v
   - "{sandbox_root}:/local-directory"
-  - mcp/filesystem
+  - mcp/filesystemmb
   - /local-directory
 runtime_models:
-  ollama: llama3.1
+  ollama: llama3.3:70b
   openai: gpt-4.1-mini
   anthropic: claude-3-5-sonnet-20241022
+  gemini: gemini-3-pro-preview
 faults:
   permission_path: null
   missing_path: null
