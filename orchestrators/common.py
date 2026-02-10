@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from observability.trace_schema import StepAction, StepResult, TaskSpec, ToolRegistry
-from runtimes.base import RuntimeClient
+from runtimes.base import RuntimeClient, TokenUsage
 from tools.mcp_gateway_client import MCPGatewayClient
 
 
@@ -21,6 +21,26 @@ class EpisodeConfig:
     max_tool_retries: int
     timeout_s: float
     tool_timeout_s: float
+
+
+@dataclass
+class LLMCallMetrics:
+    llm_calls: int = 0
+    latency_ms: float = 0.0
+    retries: int = 0
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    cost_usd: float = 0.0
+
+
+def _merge_usage(lhs: TokenUsage, rhs: TokenUsage) -> TokenUsage:
+    return TokenUsage(
+        prompt_tokens=lhs.prompt_tokens + rhs.prompt_tokens,
+        completion_tokens=lhs.completion_tokens + rhs.completion_tokens,
+        total_tokens=lhs.total_tokens + rhs.total_tokens,
+        cached_prompt_tokens=lhs.cached_prompt_tokens + rhs.cached_prompt_tokens,
+        cache_creation_input_tokens=lhs.cache_creation_input_tokens + rhs.cache_creation_input_tokens,
+        cache_read_input_tokens=lhs.cache_read_input_tokens + rhs.cache_read_input_tokens,
+    )
 
 
 def build_messages(
@@ -91,23 +111,34 @@ async def call_llm_for_action(
     messages: List[Dict[str, str]],
     max_retries: int,
     seed: Optional[int] = None,
-) -> Tuple[StepAction, int, float, int]:
+) -> Tuple[StepAction, LLMCallMetrics]:
     llm_calls = 0
     retries = 0
     total_latency_ms = 0.0
+    usage = TokenUsage()
+    total_cost_usd = 0.0
     last_error: Optional[Exception] = None
     current_messages = list(messages)
 
     for attempt in range(max_retries + 1):
         t0 = time.perf_counter()
-        raw = await runtime.chat(current_messages, seed=seed)
+        result = await runtime.chat(current_messages, seed=seed)
         t1 = time.perf_counter()
         llm_calls += 1
         total_latency_ms += (t1 - t0) * 1000
+        usage = _merge_usage(usage, result.usage)
+        total_cost_usd += result.cost_usd
+        raw = result.content
         try:
             payload = json.loads(raw)
             action = StepAction.model_validate(payload)
-            return action, llm_calls, total_latency_ms, retries
+            return action, LLMCallMetrics(
+                llm_calls=llm_calls,
+                latency_ms=total_latency_ms,
+                retries=retries,
+                usage=usage,
+                cost_usd=total_cost_usd,
+            )
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             if attempt >= max_retries:
@@ -183,11 +214,13 @@ async def run_step_loop(
     validator: Callable[[Path], Tuple[bool, str]],
     episode_config: EpisodeConfig,
     seed: int,
-) -> Tuple[List[StepResult], int, int, int]:
+) -> Tuple[List[StepResult], int, int, int, TokenUsage, float]:
     history: List[StepResult] = []
     llm_calls = 0
     tool_calls = 0
     retries = 0
+    total_usage = TokenUsage()
+    total_cost_usd = 0.0
 
     tools = await tool_client.list_tools()
     allowed_tools = [tool for tool in tools.tools if tool.name in task.allowed_tools]
@@ -196,14 +229,16 @@ async def run_step_loop(
     for step_index in range(episode_config.max_steps):
         step_start = time.perf_counter()
         messages = build_messages(task, tool_registry, history, sandbox_root)
-        action, llm_inc, llm_latency_ms, llm_retries = await call_llm_for_action(
+        action, llm_metrics = await call_llm_for_action(
             runtime,
             messages,
             episode_config.max_llm_retries,
             seed=seed,
         )
-        llm_calls += llm_inc
-        retries += llm_retries
+        llm_calls += llm_metrics.llm_calls
+        retries += llm_metrics.retries
+        total_usage = _merge_usage(total_usage, llm_metrics.usage)
+        total_cost_usd += llm_metrics.cost_usd
 
         tool_latency_ms = 0.0
         tool_result = None
@@ -239,11 +274,15 @@ async def run_step_loop(
             tool_result=tool_result,
             validated=validated,
             validation_error=validation_error if not validated else None,
-            llm_latency_ms=llm_latency_ms,
+            llm_latency_ms=llm_metrics.latency_ms,
+            llm_prompt_tokens=llm_metrics.usage.prompt_tokens,
+            llm_completion_tokens=llm_metrics.usage.completion_tokens,
+            llm_total_tokens=llm_metrics.usage.total_tokens,
+            llm_cost_usd=llm_metrics.cost_usd,
             tool_latency_ms=tool_latency_ms,
             step_latency_ms=(step_end - step_start) * 1000,
             error=error,
-            retries=llm_retries + tool_retries,
+            retries=llm_metrics.retries + tool_retries,
         )
         history.append(step_result)
 
@@ -254,4 +293,4 @@ async def run_step_loop(
         if error:
             break
 
-    return history, llm_calls, tool_calls, retries
+    return history, llm_calls, tool_calls, retries, total_usage, total_cost_usd
