@@ -2,8 +2,7 @@ orchestrators:
   - langgraph
   - crewai
   - autogen
-runtimes:
-  - ollama
+
 # Use "all" to run every task
 tasks:
   - all
@@ -24,13 +23,13 @@ gateway_cmd:
   - --rm
   - -v
   - "{sandbox_root}:/local-directory"
-  - mcp/filesystemmb
+  - mcp/filesystem
   - /local-directory
+runtimes:
+  - ollama
+
 runtime_models:
-  ollama: llama3.3:70b
-  openai: gpt-4.1-mini
-  anthropic: claude-3-5-sonnet-20241022
-  gemini: gemini-3-pro-preview
+  ollama: llama3.1:latest
 faults:
   permission_path: null
   missing_path: null
