@@ -5,6 +5,8 @@ Reference pricing sources checked on 2026-02-10:
 - Anthropic model overview: https://platform.claude.com/docs/en/about-claude/models/overview
 - Anthropic prompt caching pricing: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
 - Gemini API pricing: https://ai.google.dev/gemini-api/docs/pricing
+- Mistral pricing: https://docs.mistral.ai/getting-started/models/pricing/
+- xAI API pricing: https://docs.x.ai/api
 """
 
 from __future__ import annotations
@@ -30,6 +32,9 @@ class ModelPricing:
 
 OPENAI_PRICING: Dict[str, ModelPricing] = {
     "gpt-5.2": ModelPricing(input_per_million=1.75, output_per_million=14.0, cached_input_per_million=0.175),
+    "gpt-5.2-thinking": ModelPricing(
+        input_per_million=1.75, output_per_million=14.0, cached_input_per_million=0.175
+    ),
     "gpt-5.2-chat-latest": ModelPricing(
         input_per_million=1.75, output_per_million=14.0, cached_input_per_million=0.175
     ),
@@ -122,19 +127,43 @@ GOOGLE_PRICING: Dict[str, ModelPricing] = {
     ),
 }
 
+MISTRAL_PRICING: Dict[str, ModelPricing] = {
+    # Mistral Large 3 (mistral-large-2512+1)
+    "mistral-large-2512+1": ModelPricing(input_per_million=0.5, output_per_million=1.5),
+}
+
+XAI_PRICING: Dict[str, ModelPricing] = {
+    # Grok Fast pricing from xAI API docs.
+    "grok-4.1-fast": ModelPricing(input_per_million=0.2, output_per_million=0.5, cached_input_per_million=0.05),
+    "grok-4-1-fast": ModelPricing(
+        input_per_million=0.2, output_per_million=0.5, cached_input_per_million=0.05
+    ),
+    "grok-4-fast-non-reasoning": ModelPricing(
+        input_per_million=0.2, output_per_million=0.5, cached_input_per_million=0.05
+    ),
+}
+
 
 RUNTIME_PRICING_TABLES: Dict[str, Dict[str, ModelPricing]] = {
     "openai": OPENAI_PRICING,
     "anthropic": ANTHROPIC_PRICING,
     "gemini": GOOGLE_PRICING,
     "google": GOOGLE_PRICING,
+    "mistral": MISTRAL_PRICING,
+    "grok": XAI_PRICING,
+    "xai": XAI_PRICING,
 }
 
 
 MODEL_ALIASES: Dict[str, str] = {
     "gemini 3 pro (preview)": "gemini-3-pro-preview",
+    "gemini 3 pro": "gemini-3-pro-preview",
     "claude opus 4.6": "claude-opus-4-6",
     "gpt 5.2": "gpt-5.2",
+    "gpt-5.2 thinking": "gpt-5.2-thinking",
+    "mistral large 3": "mistral-large-2512+1",
+    "mistral large 3 (mistral-large-2512+1)": "mistral-large-2512+1",
+    "grok 4.1 fast": "grok-4.1-fast",
 }
 
 

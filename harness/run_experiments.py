@@ -7,6 +7,7 @@ import asyncio
 import csv
 import time
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import shutil
 from typing import Dict, List
@@ -22,6 +23,7 @@ from orchestrators.crewai_engine import CrewAIEngine
 from orchestrators.langgraph_engine import LangGraphEngine
 from runtimes.anthropic_client import AnthropicClient
 from runtimes.base import RuntimeConfig
+from runtimes.gemini_client import GeminiClient
 from runtimes.ollama_client import OllamaClient
 from runtimes.openai_client import OpenAIClient
 from tools.mcp_gateway_client import MCPClientConfig, MCPGatewayClient
@@ -63,6 +65,10 @@ def build_runtime(runtime_name: str, config: ExperimentConfig) -> tuple[str, obj
             "ollama": "llama3.1",
             "openai": "gpt-4.1-mini",
             "anthropic": "claude-3-5-sonnet-20241022",
+            "gemini": "gemini-3-pro-preview",
+            "mistral": "mistral-large-2512+1",
+            "grok": "grok-4.1-fast",
+            "xai": "grok-4.1-fast",
         }
         model = default_models.get(runtime_name, "")
     if not model:
@@ -75,6 +81,22 @@ def build_runtime(runtime_name: str, config: ExperimentConfig) -> tuple[str, obj
         return runtime_name, OpenAIClient(runtime_config)
     if runtime_name == "anthropic":
         return runtime_name, AnthropicClient(runtime_config)
+    if runtime_name == "gemini":
+        return runtime_name, GeminiClient(runtime_config)
+    if runtime_name == "mistral":
+        return runtime_name, OpenAIClient(
+            runtime_config,
+            base_url=os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),
+            api_key=os.getenv("MISTRAL_API_KEY"),
+            enforce_json_response=False,
+        )
+    if runtime_name in {"grok", "xai"}:
+        return runtime_name, OpenAIClient(
+            runtime_config,
+            base_url=os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
+            api_key=os.getenv("XAI_API_KEY"),
+            enforce_json_response=False,
+        )
     raise ValueError(f"Unknown runtime: {runtime_name}")
 
 

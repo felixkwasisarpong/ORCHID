@@ -17,6 +17,7 @@ class OpenAIClient(RuntimeClient):
     config: RuntimeConfig
     base_url: str = "https://api.openai.com/v1"
     api_key: Optional[str] = None
+    enforce_json_response: bool = True
 
     async def chat(self, messages: List[Dict[str, Any]], seed: Optional[int] = None) -> ChatResult:
         key = self.api_key or os.getenv("OPENAI_API_KEY")
@@ -27,8 +28,9 @@ class OpenAIClient(RuntimeClient):
             "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
-            "response_format": {"type": "json_object"},
         }
+        if self.enforce_json_response:
+            payload["response_format"] = {"type": "json_object"}
         if seed is not None:
             payload["seed"] = seed
         headers = {"Authorization": f"Bearer {key}"}
