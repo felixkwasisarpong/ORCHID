@@ -12,8 +12,12 @@ dependencies = [
   "langgraph>=0.2.0",
   "crewai>=0.30.0",
   "pyautogen>=0.2.0",
+  "pandas>=2.0",
+  "matplotlib>=3.8",
+  "seaborn>=0.13",
 ]
 
 [project.scripts]
 run-experiments = "harness.run_experiments:main"
 smoke-test = "scripts.smoke_test:main"
+generate-figures = "analysis.generate_figures:main"

@@ -144,6 +144,15 @@ XAI_PRICING: Dict[str, ModelPricing] = {
 }
 
 
+OLLAMA_PRICING: Dict[str, ModelPricing] = {
+    # Ollama runs locally — no API cost. Entries exist so pricing lookup never silently fails.
+    "qwen2.5:14b": ModelPricing(input_per_million=0.0, output_per_million=0.0),
+    "qwen2.5:7b": ModelPricing(input_per_million=0.0, output_per_million=0.0),
+    "qwen2.5": ModelPricing(input_per_million=0.0, output_per_million=0.0),
+    "llama3.1": ModelPricing(input_per_million=0.0, output_per_million=0.0),
+    "llama3.3": ModelPricing(input_per_million=0.0, output_per_million=0.0),
+}
+
 RUNTIME_PRICING_TABLES: Dict[str, Dict[str, ModelPricing]] = {
     "openai": OPENAI_PRICING,
     "anthropic": ANTHROPIC_PRICING,
@@ -152,6 +161,7 @@ RUNTIME_PRICING_TABLES: Dict[str, Dict[str, ModelPricing]] = {
     "mistral": MISTRAL_PRICING,
     "grok": XAI_PRICING,
     "xai": XAI_PRICING,
+    "ollama": OLLAMA_PRICING,
 }
 
 
@@ -164,6 +174,11 @@ MODEL_ALIASES: Dict[str, str] = {
     "mistral large 3": "mistral-large-2512+1",
     "mistral large 3 (mistral-large-2512+1)": "mistral-large-2512+1",
     "grok 4.1 fast": "grok-4.1-fast",
+    # Ollama Qwen aliases
+    "qwen2.5": "qwen2.5:14b",
+    "qwen 2.5": "qwen2.5:14b",
+    "qwen2.5 14b": "qwen2.5:14b",
+    "qwen2.5 7b": "qwen2.5:7b",
 }
 
 
