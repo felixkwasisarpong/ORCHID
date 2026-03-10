@@ -62,9 +62,9 @@ def build_runtime(runtime_name: str, config: ExperimentConfig) -> tuple[str, obj
     model = config.runtime_models.get(runtime_name)
     if not model:
         default_models = {
-            "ollama": "llama3.1",
-            "openai": "gpt-4.1-mini",
-            "anthropic": "claude-3-5-sonnet-20241022",
+            "ollama": "qwen2.5:14b",
+            "openai": "gpt-5.2",
+            "anthropic": "claude-opus-4-6",
             "gemini": "gemini-3-pro-preview",
             "mistral": "mistral-large-2512+1",
             "grok": "grok-4.1-fast",

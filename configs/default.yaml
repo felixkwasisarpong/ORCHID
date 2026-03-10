@@ -29,7 +29,7 @@ runtimes:
   - ollama
 
 runtime_models:
-  ollama: llama3.1:latest
+  ollama: qwen2.5:14b
 faults:
   permission_path: null
   missing_path: null
