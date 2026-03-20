@@ -11,6 +11,9 @@ Research-grade Python prototype for comparing three in-process orchestrators ove
 - Ollama (local)
 - OpenAI (cloud)
 - Anthropic (cloud)
+- Gemini (cloud)
+- Mistral (cloud)
+- xAI / Grok (cloud)
 
 **Tools**
 - Docker MCP Gateway filesystem tools via stdio transport by default (streaming HTTP optional)
@@ -41,6 +44,9 @@ docker mcp gateway run --server filesystem --root $(pwd)/evaluation/sandboxes --
 ```bash
 export OPENAI_API_KEY=... 
 export ANTHROPIC_API_KEY=...
+export GEMINI_API_KEY=...   # or GOOGLE_API_KEY
+export MISTRAL_API_KEY=...
+export XAI_API_KEY=...
 ```
 
 ## Run Experiments
@@ -54,6 +60,9 @@ python -m harness.run_experiments --config configs/default.yaml
 # Single orchestrator + runtime + task
 python -m harness.run_experiments --orchestrator langgraph --runtime ollama --task task_01_count_lines
 ```
+
+Full matrix (baseline + faults) is configured under `configs/matrix/` and defaults to cloud runtimes
+(`openai`, `anthropic`, `gemini`, `mistral`, `xai`). `ollama` remains useful for quick local smoke checks.
 
 ## Smoke Test
 
@@ -110,6 +119,8 @@ docker compose -f docker/compose.harness.yml down
 - Summary CSV: `evaluation/results/summary_<timestamp>.csv`
 
 Each trace includes consistent counters (`llm_calls`, `tool_calls`, `retries`, `total_latency_ms`) and per-step timings.
+Traces also include structured run outcomes (`terminal_reason`, `failure_mode`) and step-level `error_category`
+for failure-mode analysis.
 
 ## Token Cost Accounting
 
@@ -127,6 +138,54 @@ Notes:
 - Ollama is always recorded as `llm_cost_usd = 0.0`.
 - Cost is computed from token usage returned by the provider APIs.
 - If a model is unknown to the local pricing map, cost falls back to `0.0` until you add a rate in `runtimes/pricing.py`.
+
+## RQ Summary Tables
+
+Generate CSV tables aligned to reliability/recovery, latency/retry tradeoffs, and failure modes:
+
+```bash
+python -m analysis.rq_summary --results-dir evaluation/results --out-dir evaluation/results/analysis
+# or, if installed as script:
+rq-summary --results-dir evaluation/results --out-dir evaluation/results/analysis
+```
+
+## Paper Stats and Metadata
+
+Generate bootstrap confidence intervals and corrected pairwise hypothesis tests:
+
+```bash
+python -m analysis.stats_plan --results-dir evaluation/results --out-dir evaluation/results/stats
+# or:
+stats-plan --results-dir evaluation/results --out-dir evaluation/results/stats
+```
+
+Generate paper-ready experimental details (run cardinality, reproducibility metadata, seed protocol, data handling):
+
+```bash
+python -m analysis.experiment_report --results-dir evaluation/results --matrix-dir configs/matrix --out-dir evaluation/results/report
+# or:
+experiment-report --results-dir evaluation/results --matrix-dir configs/matrix --out-dir evaluation/results/report
+```
+
+Generate the complete figure set (including RQ-targeted CI/failure-mode/tradeoff/error-category plots):
+
+```bash
+python -m analysis.generate_figures --results-dir evaluation/results --out-dir evaluation/figures
+```
+
+Run the full paper bundle pipeline in one command (RQ tables + report + stats + figures):
+
+```bash
+python -m analysis.paper_bundle --results-dir evaluation/results --matrix-dir configs/matrix --out-dir evaluation/paper_bundle
+# or:
+paper-bundle --results-dir evaluation/results --matrix-dir configs/matrix --out-dir evaluation/paper_bundle
+```
+
+If figure rendering has local library issues, you can still build the rest of the bundle:
+
+```bash
+paper-bundle --results-dir evaluation/results --matrix-dir configs/matrix --out-dir evaluation/paper_bundle --skip-figures
+```
 
 ## Configuration Notes
 

@@ -9,7 +9,7 @@ Outputs:
     evaluation/figures/fig_01_success_heatmap.{pdf,png}
     evaluation/figures/fig_02_fault_overview.{pdf,png}
     ...
-    evaluation/figures/fig_10_tool_latency_box.{pdf,png}
+    evaluation/figures/fig_16_step_error_heatmap.{pdf,png}
 """
 
 from __future__ import annotations
@@ -38,6 +38,12 @@ _FIGURES = [
     ("fig_08_retry_heatmap",     lambda df, ds: P.fig_retry_heatmap(df)),
     ("fig_09_latency_cdf",       lambda df, ds: P.fig_latency_cdf(df)),
     ("fig_10_tool_latency_box",  lambda df, ds: P.fig_tool_latency_box(ds, df)),
+    ("fig_11_success_ci_runtime_severity", lambda df, ds: P.fig_success_ci_runtime_severity(df)),
+    ("fig_12_failure_mode_stacked", lambda df, ds: P.fig_failure_mode_stacked(df)),
+    ("fig_13_latency_cdf_runtime", lambda df, ds: P.fig_latency_cdf_runtime(df)),
+    ("fig_14_retry_distribution_runtime", lambda df, ds: P.fig_retry_distribution_runtime(df)),
+    ("fig_15_retry_latency_tradeoff", lambda df, ds: P.fig_retry_latency_tradeoff(df)),
+    ("fig_16_step_error_heatmap", lambda df, ds: P.fig_step_error_heatmap(ds)),
 ]
 
 
@@ -97,7 +103,7 @@ def main() -> None:
     for idx, (name, builder) in enumerate(_FIGURES, start=1):
         if only_set and idx not in only_set:
             continue
-        print(f"  [{idx:02d}/10] {name} …", end=" ", flush=True)
+        print(f"  [{idx:02d}/{len(_FIGURES):02d}] {name} …", end=" ", flush=True)
         try:
             fig: plt.Figure = builder(df_summary, df_steps)
             for fmt in args.formats:

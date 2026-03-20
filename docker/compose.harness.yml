@@ -4,6 +4,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     working_dir: ${PWD}
+    env_file:
+      - ../.env
     volumes:
       - ${PWD}:${PWD}
       - /var/run/docker.sock:/var/run/docker.sock
@@ -15,8 +17,6 @@ services:
       - CREWAI_DISABLE_TELEMETRY=true
       - CREWAI_TESTING=true
       - LITELLM_LOG=CRITICAL
-      - OPENAI_API_KEY
-      - ANTHROPIC_API_KEY
     extra_hosts:
       - host.docker.internal:host-gateway
     stdin_open: true

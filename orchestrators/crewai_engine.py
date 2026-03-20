@@ -16,8 +16,10 @@ from observability.trace_schema import RunTrace, StepAction, StepResult, TaskSpe
 from orchestrators.common import (
     EpisodeConfig,
     build_messages,
+    categorize_error_message,
     call_llm_for_action,
     call_tool_with_retries,
+    infer_terminal_outcome,
 )
 from runtimes.base import RuntimeClient
 from tools.mcp_gateway_client import MCPGatewayClient
@@ -95,6 +97,7 @@ class CrewAIEngine:
         llm_completion_tokens = 0
         llm_total_tokens = 0
         llm_cost_usd = 0.0
+        run_error = None
         use_crewai = os.getenv("ORCHID_CREWAI_NATIVE", "0").lower() in {"1", "true", "yes"}
         crewai_timeout_s = min(self.episode_config.timeout_s, 5.0)
 
@@ -154,6 +157,7 @@ class CrewAIEngine:
             step_cost_usd = 0.0
             action = None
             error = None
+            error_category = None
             if use_crewai and crew is not None:
                 try:
                     crew_output = await asyncio.wait_for(
@@ -192,6 +196,8 @@ class CrewAIEngine:
                     llm_end = time.perf_counter()
                     llm_latency_ms = (llm_end - llm_start) * 1000
                     error = str(exc)
+                    error_category = categorize_error_message(error)
+                    run_error = error
 
             tool_latency_ms = 0.0
             tool_result = None
@@ -200,8 +206,10 @@ class CrewAIEngine:
             if action and action.action_type == "tool_call":
                 if action.tool_call is None:
                     error = "tool_call missing"
+                    error_category = categorize_error_message(error)
                 elif action.tool_call.name not in task.allowed_tools:
                     error = f"Tool {action.tool_call.name} not allowed"
+                    error_category = categorize_error_message(error)
                 else:
                     try:
                         result, tool_inc, tool_latency_ms, tool_retries = await call_tool_with_retries(
@@ -216,6 +224,7 @@ class CrewAIEngine:
                         tool_result = result
                     except Exception as exc:  # noqa: BLE001
                         error = str(exc)
+                        error_category = categorize_error_message(error)
 
             validated, validation_error = self.validator(sandbox_root)
             step_end = time.perf_counter()
@@ -242,6 +251,7 @@ class CrewAIEngine:
                 tool_latency_ms=tool_latency_ms,
                 step_latency_ms=(step_end - step_start) * 1000,
                 error=error,
+                error_category=error_category,
                 retries=llm_retries + tool_retries,
             )
             history.append(step_result)
@@ -257,6 +267,9 @@ class CrewAIEngine:
             success = history[-1].validated
             if history[-1].error:
                 error_msg = history[-1].error
+        terminal_reason, failure_mode = infer_terminal_outcome(
+            history, self.episode_config.max_steps, run_error=run_error
+        )
 
         return RunTrace(
             run_id=run_id,
@@ -276,6 +289,8 @@ class CrewAIEngine:
             llm_cost_usd=llm_cost_usd,
             steps=history,
             success=success,
+            terminal_reason=terminal_reason,
+            failure_mode=failure_mode,
             error=error_msg,
             fault_config={},
         )

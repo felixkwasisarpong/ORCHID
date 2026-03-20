@@ -14,6 +14,7 @@ Usage example:
 
 from __future__ import annotations
 
+import math
 import warnings
 from typing import Optional
 
@@ -48,6 +49,26 @@ sns.set_theme(style="whitegrid", palette=_PALETTE)
 def _orch_colors() -> dict[str, str]:
     colors = sns.color_palette(_PALETTE, n_colors=len(_ORCHESTRATOR_ORDER))
     return dict(zip(_ORCHESTRATOR_ORDER, [c for c in colors]))
+
+
+def _bootstrap_mean_ci(
+    values: pd.Series,
+    n_boot: int = 2000,
+    alpha: float = 0.05,
+    seed: int = 7,
+) -> tuple[float, float]:
+    clean = values.dropna().astype(float).to_numpy()
+    if clean.size == 0:
+        return float("nan"), float("nan")
+    if clean.size == 1:
+        return float(clean[0]), float(clean[0])
+
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, clean.size, size=(n_boot, clean.size))
+    boot = clean[idx].mean(axis=1)
+    lo = float(np.quantile(boot, alpha / 2))
+    hi = float(np.quantile(boot, 1 - alpha / 2))
+    return lo, hi
 
 
 # ---------------------------------------------------------------------------
@@ -463,5 +484,380 @@ def fig_tool_latency_box(df_steps: pd.DataFrame, df_summary: Optional[pd.DataFra
     ax.set_title("Tool Call Latency: Baseline vs Latency Fault")
     ax.tick_params(axis="x", rotation=25)
     ax.legend(title="Condition")
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Figure 11 — RQ1 Success with 95% CI by Runtime × Severity
+# ---------------------------------------------------------------------------
+
+def fig_success_ci_runtime_severity(df: pd.DataFrame) -> plt.Figure:
+    """Line plots of success rate with bootstrap 95% CI by runtime and fault severity."""
+    data = df.copy()
+    data["severity_group"] = np.where(
+        data["fault_type"] == "none",
+        "none",
+        data["fault_severity"].fillna("none"),
+    )
+    sev_order = ["none", "low", "med", "high"]
+    runtimes = sorted(data["runtime"].dropna().unique())
+    if not runtimes:
+        warnings.warn("No runtime data found; fig_success_ci_runtime_severity may be empty.")
+        runtimes = ["runtime"]
+
+    n_cols = min(3, len(runtimes))
+    n_rows = int(math.ceil(len(runtimes) / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.8 * n_cols, 3.8 * n_rows), sharey=True)
+    axes_arr = np.atleast_1d(axes).ravel()
+    colors = _orch_colors()
+
+    for ax, runtime in zip(axes_arr, runtimes):
+        sub_rt = data[data["runtime"] == runtime]
+        for orch in _ORCHESTRATOR_ORDER:
+            sub = sub_rt[sub_rt["orchestrator"] == orch]
+            if sub.empty:
+                continue
+            stats = []
+            for sev in sev_order:
+                s = sub[sub["severity_group"] == sev]["success"]
+                if s.empty:
+                    stats.append((np.nan, np.nan, np.nan))
+                    continue
+                mean = float(s.mean())
+                lo, hi = _bootstrap_mean_ci(s)
+                stats.append((mean, lo, hi))
+
+            xs = np.arange(len(sev_order), dtype=float)
+            means = np.array([t[0] for t in stats], dtype=float)
+            lows = np.array([t[1] for t in stats], dtype=float)
+            highs = np.array([t[2] for t in stats], dtype=float)
+            valid = np.isfinite(means)
+            if not valid.any():
+                continue
+
+            yerr = np.vstack([
+                (means[valid] - lows[valid]) * 100.0,
+                (highs[valid] - means[valid]) * 100.0,
+            ])
+            ax.errorbar(
+                xs[valid],
+                means[valid] * 100.0,
+                yerr=yerr,
+                marker="o",
+                capsize=3,
+                linewidth=1.6,
+                color=colors.get(orch),
+                label=orch,
+            )
+
+        ax.set_title(str(runtime))
+        ax.set_xticks(np.arange(len(sev_order)))
+        ax.set_xticklabels(sev_order)
+        ax.set_xlabel("Fault severity group")
+        ax.set_ylim(-5, 105)
+        ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=100))
+
+    for ax in axes_arr[len(runtimes):]:
+        ax.axis("off")
+
+    axes_arr[0].set_ylabel("Success rate (%)")
+    handles, labels = axes_arr[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, title="Orchestrator", loc="lower center", ncol=len(handles))
+    fig.suptitle("RQ1: Success Rate with 95% Bootstrap CI by Runtime and Severity", y=1.02)
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Figure 12 — RQ1/RQ3 Failure Mode Distribution (stacked bars)
+# ---------------------------------------------------------------------------
+
+def fig_failure_mode_stacked(df: pd.DataFrame) -> plt.Figure:
+    """Stacked bars of failure_mode composition by orchestrator and fault type."""
+    failed = df[(~df["success"]) & (df["fault_type"].isin(_FAULT_TYPES))].copy()
+    if failed.empty:
+        warnings.warn("No failed faulted runs found; fig_failure_mode_stacked may be empty.")
+        failed = df[(~df["success"])].copy()
+
+    if failed.empty:
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.text(0.5, 0.5, "No failed runs found", ha="center", va="center")
+        ax.axis("off")
+        fig.tight_layout()
+        return fig
+
+    failed["failure_mode"] = failed["failure_mode"].fillna("unknown_error")
+    mode_counts = failed["failure_mode"].value_counts()
+    top_modes = mode_counts.head(6).index.tolist()
+    failed["failure_mode_plot"] = failed["failure_mode"].where(
+        failed["failure_mode"].isin(top_modes), "other"
+    )
+    modes = top_modes + (["other"] if (failed["failure_mode_plot"] == "other").any() else [])
+
+    orch_present = [o for o in _ORCHESTRATOR_ORDER if o in failed["orchestrator"].unique()]
+    n_cols = max(1, len(orch_present))
+    fig, axes = plt.subplots(1, n_cols, figsize=(4.8 * n_cols, 4.2), sharey=True)
+    axes_arr = np.atleast_1d(axes).ravel()
+    mode_palette = dict(zip(modes, sns.color_palette("tab20", n_colors=len(modes))))
+
+    for ax, orch in zip(axes_arr, orch_present):
+        sub = failed[failed["orchestrator"] == orch]
+        count = (
+            sub.groupby(["fault_type", "failure_mode_plot"])
+            .size()
+            .unstack(fill_value=0)
+            .reindex(index=[f for f in _FAULT_TYPES if f in sub["fault_type"].unique()], fill_value=0)
+        )
+        for mode in modes:
+            if mode not in count.columns:
+                count[mode] = 0
+        count = count[modes]
+        denom = count.sum(axis=1).replace(0, np.nan)
+        frac = count.div(denom, axis=0).fillna(0.0)
+
+        x = np.arange(len(frac))
+        bottom = np.zeros(len(frac), dtype=float)
+        for mode in modes:
+            vals = frac[mode].to_numpy() * 100.0
+            ax.bar(
+                x,
+                vals,
+                bottom=bottom,
+                color=mode_palette[mode],
+                edgecolor="white",
+                linewidth=0.5,
+                label=mode,
+            )
+            bottom += vals
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(frac.index.tolist(), rotation=20, ha="right")
+        ax.set_title(orch)
+        ax.set_xlabel("Fault type")
+        ax.set_ylim(0, 100)
+        ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=100))
+
+    axes_arr[0].set_ylabel("Failure mode composition (%)")
+    handles, labels = axes_arr[-1].get_legend_handles_labels()
+    if handles:
+        uniq = dict(zip(labels, handles))
+        fig.legend(
+            uniq.values(),
+            uniq.keys(),
+            title="Failure mode",
+            loc="lower center",
+            ncol=min(len(uniq), 4),
+        )
+    fig.suptitle("RQ1/RQ3: Failure Modes by Orchestrator and Fault Type", y=1.02)
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Figure 13 — RQ2 Latency CDF by Runtime (lines = orchestrator)
+# ---------------------------------------------------------------------------
+
+def fig_latency_cdf_runtime(df: pd.DataFrame) -> plt.Figure:
+    """Small-multiple latency CDFs per runtime, colored by orchestrator."""
+    baseline = df[df["fault_type"] == "none"].copy()
+    if baseline.empty:
+        baseline = df.copy()
+
+    runtimes = sorted(baseline["runtime"].dropna().unique())
+    if not runtimes:
+        warnings.warn("No runtime data found; fig_latency_cdf_runtime may be empty.")
+        runtimes = ["runtime"]
+    n_cols = min(3, len(runtimes))
+    n_rows = int(math.ceil(len(runtimes) / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.8 * n_cols, 3.8 * n_rows), sharey=True)
+    axes_arr = np.atleast_1d(axes).ravel()
+    colors = _orch_colors()
+
+    for ax, runtime in zip(axes_arr, runtimes):
+        sub_rt = baseline[baseline["runtime"] == runtime]
+        for orch in _ORCHESTRATOR_ORDER:
+            vals = (
+                sub_rt[sub_rt["orchestrator"] == orch]["total_latency_ms"]
+                .dropna()
+                .sort_values()
+                .to_numpy()
+            )
+            if vals.size == 0:
+                continue
+            cdf = np.arange(1, vals.size + 1, dtype=float) / vals.size
+            ax.plot(vals / 1000.0, cdf, color=colors.get(orch), linewidth=1.6, label=orch)
+
+        ax.set_title(str(runtime))
+        ax.set_xlabel("Total latency (s)")
+        ax.set_ylim(0, 1.05)
+        ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+
+    for ax in axes_arr[len(runtimes):]:
+        ax.axis("off")
+
+    axes_arr[0].set_ylabel("CDF")
+    handles, labels = axes_arr[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, title="Orchestrator", loc="lower center", ncol=len(handles))
+    fig.suptitle("RQ2: Latency CDF by Runtime and Orchestrator (baseline)", y=1.02)
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Figure 14 — RQ2 Retry Distribution by Runtime × Orchestrator
+# ---------------------------------------------------------------------------
+
+def fig_retry_distribution_runtime(df: pd.DataFrame) -> plt.Figure:
+    """Box plots of retry distributions grouped by runtime and orchestrator."""
+    runtimes = sorted(df["runtime"].dropna().unique())
+    orch_present = [o for o in _ORCHESTRATOR_ORDER if o in df["orchestrator"].unique()]
+    if not runtimes or not orch_present:
+        warnings.warn("Insufficient data for fig_retry_distribution_runtime.")
+
+    fig, ax = plt.subplots(figsize=(max(7, len(runtimes) * 1.2), 4.5))
+    sns.boxplot(
+        data=df,
+        x="runtime",
+        y="retries",
+        hue="orchestrator",
+        order=runtimes,
+        hue_order=orch_present,
+        palette=[_orch_colors()[o] for o in orch_present],
+        showfliers=True,
+        flierprops={"marker": ".", "markersize": 2.5, "alpha": 0.35},
+        ax=ax,
+    )
+    ax.set_xlabel("Runtime")
+    ax.set_ylabel("Retries per run")
+    ax.set_title("RQ2: Retry Distributions by Runtime and Orchestrator")
+    ax.legend(title="Orchestrator", bbox_to_anchor=(1.01, 1), loc="upper left")
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Figure 15 — RQ2 Retries vs Latency Tradeoff
+# ---------------------------------------------------------------------------
+
+def fig_retry_latency_tradeoff(df: pd.DataFrame) -> plt.Figure:
+    """Scatter + binned trend of retries vs latency, faceted by runtime."""
+    runtimes = sorted(df["runtime"].dropna().unique())
+    if not runtimes:
+        warnings.warn("No runtime data found; fig_retry_latency_tradeoff may be empty.")
+        runtimes = ["runtime"]
+
+    n_cols = min(3, len(runtimes))
+    n_rows = int(math.ceil(len(runtimes) / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.0 * n_cols, 3.8 * n_rows), sharey=True)
+    axes_arr = np.atleast_1d(axes).ravel()
+    colors = _orch_colors()
+    rng = np.random.default_rng(11)
+
+    for ax, runtime in zip(axes_arr, runtimes):
+        sub_rt = df[df["runtime"] == runtime].copy()
+        if sub_rt.empty:
+            ax.axis("off")
+            continue
+
+        for orch in _ORCHESTRATOR_ORDER:
+            sub = sub_rt[sub_rt["orchestrator"] == orch]
+            if sub.empty:
+                continue
+            x = sub["retries"].astype(float).to_numpy()
+            y = (sub["total_latency_ms"].astype(float) / 1000.0).to_numpy()
+            jitter = rng.normal(0.0, 0.05, size=x.shape)
+            ax.scatter(
+                x + jitter,
+                y,
+                s=12,
+                alpha=0.2,
+                color=colors.get(orch),
+            )
+            trend = sub.groupby("retries")["total_latency_ms"].mean().reset_index()
+            ax.plot(
+                trend["retries"],
+                trend["total_latency_ms"] / 1000.0,
+                marker="o",
+                linewidth=1.8,
+                color=colors.get(orch),
+                label=orch,
+            )
+
+        ax.set_title(str(runtime))
+        ax.set_xlabel("Retries")
+
+    for ax in axes_arr[len(runtimes):]:
+        ax.axis("off")
+
+    axes_arr[0].set_ylabel("Total latency (s)")
+    handles, labels = axes_arr[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, title="Orchestrator", loc="lower center", ncol=len(handles))
+    fig.suptitle("RQ2: Retries vs Latency Tradeoff", y=1.02)
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Figure 16 — RQ3 Step Error Category Heatmap by Tool × Fault
+# ---------------------------------------------------------------------------
+
+def fig_step_error_heatmap(df_steps: pd.DataFrame) -> plt.Figure:
+    """Heatmaps of step_error_category counts per tool under each fault family."""
+    data = df_steps[
+        (df_steps["action_type"] == "tool_call")
+        & (df_steps["fault_type"].isin(_FAULT_TYPES))
+        & (df_steps["step_error_category"].notna())
+    ].copy()
+    if data.empty:
+        warnings.warn("No categorized step errors found; fig_step_error_heatmap may be empty.")
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.text(0.5, 0.5, "No step errors found", ha="center", va="center")
+        ax.axis("off")
+        fig.tight_layout()
+        return fig
+
+    top_categories = data["step_error_category"].value_counts().head(8).index.tolist()
+    data["cat_plot"] = data["step_error_category"].where(
+        data["step_error_category"].isin(top_categories),
+        "other",
+    )
+    categories = top_categories + (["other"] if (data["cat_plot"] == "other").any() else [])
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharey=True)
+    axes_arr = axes.ravel()
+
+    for ax, ftype in zip(axes_arr, _FAULT_TYPES):
+        sub = data[data["fault_type"] == ftype]
+        if sub.empty:
+            ax.set_title(f"{ftype} fault")
+            ax.text(0.5, 0.5, "No errors", ha="center", va="center")
+            ax.axis("off")
+            continue
+        pivot = (
+            sub.groupby(["tool_name", "cat_plot"])
+            .size()
+            .unstack(fill_value=0)
+        )
+        for c in categories:
+            if c not in pivot.columns:
+                pivot[c] = 0
+        pivot = pivot[categories].sort_index()
+        sns.heatmap(
+            pivot,
+            ax=ax,
+            cmap="Reds",
+            linewidths=0.4,
+            cbar=False,
+        )
+        ax.set_title(f"{ftype.capitalize()} fault")
+        ax.set_xlabel("Error category")
+        ax.set_ylabel("Tool")
+        ax.tick_params(axis="x", rotation=25)
+
+    fig.suptitle("RQ3: Step Error Category Heatmaps by Tool and Fault Type", y=1.01)
     fig.tight_layout()
     return fig

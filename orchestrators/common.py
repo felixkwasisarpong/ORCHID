@@ -206,6 +206,62 @@ def extract_tool_error(result: Dict[str, Any]) -> Optional[str]:
     return "Tool returned isError=true"
 
 
+def categorize_error_message(error: Optional[str]) -> Optional[str]:
+    if not error:
+        return None
+    lowered = error.lower()
+
+    if "api_key" in lowered and "not set" in lowered:
+        return "auth_missing"
+    if "unauthorized" in lowered or "401" in lowered:
+        return "auth_failed"
+    if "forbidden" in lowered or "403" in lowered:
+        return "permission_denied"
+    if "rate limit" in lowered or "429" in lowered or "quota" in lowered:
+        return "rate_limited"
+    if "timeout" in lowered or "timed out" in lowered or "timeouterror" in lowered:
+        return "timeout"
+    if "llm failed to produce valid stepaction json" in lowered:
+        return "llm_invalid_json"
+    if "tool_call missing" in lowered:
+        return "tool_call_missing"
+    if "tool" in lowered and "not allowed" in lowered:
+        return "tool_not_allowed"
+    if "permission denied" in lowered or "operation not permitted" in lowered or "read-only" in lowered:
+        return "permission_denied"
+    if "missing file" in lowered or "no such file" in lowered or "not found" in lowered:
+        return "missing_file"
+    if "tool call failed" in lowered or "iserror=true" in lowered:
+        return "tool_execution_error"
+    if "mcp subprocess ended" in lowered or "connection" in lowered:
+        return "infrastructure_error"
+    return "unknown_error"
+
+
+def infer_terminal_outcome(
+    history: List[StepResult],
+    max_steps: int,
+    run_error: Optional[str] = None,
+) -> Tuple[str, Optional[str]]:
+    if run_error:
+        return "run_exception", categorize_error_message(run_error)
+    if not history:
+        return "no_steps", "no_steps"
+
+    last = history[-1]
+    if last.validated:
+        return "validated", None
+    if last.error:
+        return "step_error", last.error_category or categorize_error_message(last.error)
+    if last.action.action_type == "finalize":
+        return "finalized_without_validation", "premature_finalize"
+    if len(history) >= max_steps:
+        return "max_steps_exhausted", "max_steps_exhausted"
+    if last.validation_error:
+        return "validation_failed", "validation_failed"
+    return "ended_unknown", "unknown_error"
+
+
 async def run_step_loop(
     task: TaskSpec,
     sandbox_root: Path,
@@ -243,13 +299,16 @@ async def run_step_loop(
         tool_latency_ms = 0.0
         tool_result = None
         error = None
+        error_category = None
         tool_retries = 0
 
         if action.action_type == "tool_call":
             if action.tool_call is None:
                 error = "tool_call missing"
+                error_category = categorize_error_message(error)
             elif action.tool_call.name not in task.allowed_tools:
                 error = f"Tool {action.tool_call.name} not allowed"
+                error_category = categorize_error_message(error)
             else:
                 try:
                     result, tool_inc, tool_latency_ms, tool_retries = await call_tool_with_retries(
@@ -264,6 +323,7 @@ async def run_step_loop(
                     tool_result = result
                 except Exception as exc:  # noqa: BLE001
                     error = str(exc)
+                    error_category = categorize_error_message(error)
 
         validated, validation_error = validator(sandbox_root)
         step_end = time.perf_counter()
@@ -282,6 +342,7 @@ async def run_step_loop(
             tool_latency_ms=tool_latency_ms,
             step_latency_ms=(step_end - step_start) * 1000,
             error=error,
+            error_category=error_category,
             retries=llm_metrics.retries + tool_retries,
         )
         history.append(step_result)
