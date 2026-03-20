@@ -41,6 +41,7 @@ class StepResult(BaseModel):
     tool_latency_ms: float = 0.0
     step_latency_ms: float = 0.0
     error: Optional[str] = None
+    error_category: Optional[str] = None
     retries: int = 0
 
 
@@ -73,6 +74,8 @@ class RunTrace(BaseModel):
     llm_cost_usd: float = 0.0
     steps: List[StepResult]
     success: bool
+    terminal_reason: str = "unknown"
+    failure_mode: Optional[str] = None
     error: Optional[str] = None
     fault_config: Dict[str, Any] = Field(default_factory=dict)
 

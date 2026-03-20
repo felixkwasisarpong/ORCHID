@@ -12,8 +12,10 @@ from observability.trace_schema import RunTrace, StepResult, TaskSpec, ToolRegis
 from orchestrators.common import (
     EpisodeConfig,
     build_messages,
+    categorize_error_message,
     call_llm_for_action,
     call_tool_with_retries,
+    infer_terminal_outcome,
 )
 from runtimes.base import RuntimeClient
 from tools.mcp_gateway_client import MCPGatewayClient
@@ -77,13 +79,16 @@ class LangGraphEngine:
             tool_latency_ms = 0.0
             tool_result = None
             error = None
+            error_category = None
             tool_retries = 0
 
             if action.action_type == "tool_call":
                 if action.tool_call is None:
                     error = "tool_call missing"
+                    error_category = categorize_error_message(error)
                 elif action.tool_call.name not in task.allowed_tools:
                     error = f"Tool {action.tool_call.name} not allowed"
+                    error_category = categorize_error_message(error)
                 else:
                     try:
                         result, tool_inc, tool_latency_ms, tool_retries = await call_tool_with_retries(
@@ -98,6 +103,7 @@ class LangGraphEngine:
                         tool_result = result
                     except Exception as exc:  # noqa: BLE001
                         error = str(exc)
+                        error_category = categorize_error_message(error)
 
             validated, validation_error = self.validator(sandbox_root)
             step_end = time.perf_counter()
@@ -116,6 +122,7 @@ class LangGraphEngine:
                 tool_latency_ms=tool_latency_ms,
                 step_latency_ms=(step_end - step_start) * 1000,
                 error=error,
+                error_category=error_category,
                 retries=llm_metrics.retries + tool_retries,
             )
             state["history"].append(step_result)
@@ -158,6 +165,9 @@ class LangGraphEngine:
             success = final_state["history"][-1].validated
             if final_state["history"][-1].error:
                 error_msg = final_state["history"][-1].error
+        terminal_reason, failure_mode = infer_terminal_outcome(
+            final_state["history"], self.episode_config.max_steps
+        )
 
         return RunTrace(
             run_id=run_id,
@@ -177,6 +187,8 @@ class LangGraphEngine:
             llm_cost_usd=final_state["llm_cost_usd"],
             steps=final_state["history"],
             success=success,
+            terminal_reason=terminal_reason,
+            failure_mode=failure_mode,
             error=error_msg,
             fault_config={},
         )

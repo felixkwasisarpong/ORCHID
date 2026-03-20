@@ -18,7 +18,7 @@ from harness.config import ExperimentConfig, FaultConfig, load_config
 from observability.logger import JSONLLogger, default_trace_path
 from observability.trace_schema import RunTrace
 from orchestrators.autogen_engine import AutoGenEngine
-from orchestrators.common import EpisodeConfig
+from orchestrators.common import EpisodeConfig, categorize_error_message
 from orchestrators.crewai_engine import CrewAIEngine
 from orchestrators.langgraph_engine import LangGraphEngine
 from runtimes.anthropic_client import AnthropicClient
@@ -194,6 +194,7 @@ async def run_once(
         trace = trace.model_copy(update={"fault_config": fault_config})
     except Exception as exc:  # noqa: BLE001
         ended_perf = time.perf_counter()
+        error_text = f"{type(exc).__name__}: {exc}"
         trace = RunTrace(
             run_id=run_id,
             orchestrator=orchestrator_name,
@@ -208,7 +209,9 @@ async def run_once(
             retries=0,
             steps=[],
             success=False,
-            error=f"{type(exc).__name__}: {exc}",
+            terminal_reason="run_exception",
+            failure_mode=categorize_error_message(error_text),
+            error=error_text,
             fault_config=fault_config,
         )
 
@@ -259,6 +262,8 @@ def write_summary(traces: List[RunTrace], results_dir: Path) -> Path:
                 "llm_total_tokens",
                 "llm_cost_usd",
                 "total_latency_ms",
+                "terminal_reason",
+                "failure_mode",
             ]
         )
         for trace in traces:
@@ -278,6 +283,8 @@ def write_summary(traces: List[RunTrace], results_dir: Path) -> Path:
                     trace.llm_total_tokens,
                     f"{trace.llm_cost_usd:.8f}",
                     f"{trace.total_latency_ms:.2f}",
+                    trace.terminal_reason,
+                    trace.failure_mode or "",
                 ]
             )
     return path

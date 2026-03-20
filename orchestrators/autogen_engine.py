@@ -14,8 +14,10 @@ from observability.trace_schema import RunTrace, StepAction, StepResult, TaskSpe
 from orchestrators.common import (
     EpisodeConfig,
     build_messages,
+    categorize_error_message,
     call_llm_for_action,
     call_tool_with_retries,
+    infer_terminal_outcome,
 )
 from runtimes.base import RuntimeClient
 from tools.mcp_gateway_client import MCPGatewayClient
@@ -95,6 +97,7 @@ class AutoGenEngine:
         llm_completion_tokens = 0
         llm_total_tokens = 0
         llm_cost_usd = 0.0
+        run_error = None
 
         for step_index in range(self.episode_config.max_steps):
             step_start = time.perf_counter()
@@ -120,6 +123,7 @@ class AutoGenEngine:
             tool_latency_ms = 0.0
             tool_result = None
             error = None
+            error_category = None
             tool_retries = 0
 
             try:
@@ -142,6 +146,8 @@ class AutoGenEngine:
                     step_cost_usd += llm_metrics.cost_usd
             except Exception as exc:  # noqa: BLE001
                 error = str(exc)
+                error_category = categorize_error_message(error)
+                run_error = error
                 break
 
             llm_prompt_tokens += step_prompt_tokens
@@ -152,8 +158,10 @@ class AutoGenEngine:
             if action.action_type == "tool_call":
                 if action.tool_call is None:
                     error = "tool_call missing"
+                    error_category = categorize_error_message(error)
                 elif action.tool_call.name not in task.allowed_tools:
                     error = f"Tool {action.tool_call.name} not allowed"
+                    error_category = categorize_error_message(error)
                 else:
                     try:
                         result, tool_inc, tool_latency_ms, tool_retries = await call_tool_with_retries(
@@ -168,6 +176,7 @@ class AutoGenEngine:
                         tool_result = result
                     except Exception as exc:  # noqa: BLE001
                         error = str(exc)
+                        error_category = categorize_error_message(error)
 
             validated, validation_error = self.validator(sandbox_root)
             step_end = time.perf_counter()
@@ -186,6 +195,7 @@ class AutoGenEngine:
                 tool_latency_ms=tool_latency_ms,
                 step_latency_ms=(step_end - step_start) * 1000,
                 error=error,
+                error_category=error_category,
                 retries=llm_retries + tool_retries,
             )
             history.append(step_result)
@@ -201,6 +211,9 @@ class AutoGenEngine:
             success = history[-1].validated
             if history[-1].error:
                 error_msg = history[-1].error
+        terminal_reason, failure_mode = infer_terminal_outcome(
+            history, self.episode_config.max_steps, run_error=run_error
+        )
 
         return RunTrace(
             run_id=run_id,
@@ -220,6 +233,8 @@ class AutoGenEngine:
             llm_cost_usd=llm_cost_usd,
             steps=history,
             success=success,
+            terminal_reason=terminal_reason,
+            failure_mode=failure_mode,
             error=error_msg,
             fault_config={},
         )
