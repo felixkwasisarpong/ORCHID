@@ -1,0 +1,251 @@
+\section{Benchmark Design}
+\label{sec:benchmark_design}
+
+This section describes the filesystem benchmark used to evaluate LLM orchestration frameworks under deterministic, tool-mediated workloads. The benchmark isolates orchestration behavior by requiring interaction with an external stateful environment (filesystem tools) while keeping task semantics simple and validation programmatic.
+
+\subsection{Design Goals}
+
+The benchmark is guided by four goals:
+\begin{itemize}
+    \item \textbf{Determinism}: Each task has a single correct end-state checked by deterministic validators, enabling reproducible comparisons and minimizing subjective grading \cite{gray1993benchmark, wilson2014best}.
+    \item \textbf{Tool-Centric Execution}: Every task requires at least one filesystem tool call, forcing the orchestrator to mediate LLM decisions and external state updates.
+    \item \textbf{Minimal Semantics}: Tasks use basic filesystem operations (read, write, list, move, delete) instead of domain knowledge, reducing confounders and emphasizing orchestration quality \cite{gray1993benchmark}.
+    \item \textbf{Reproducibility}: Runs execute in isolated per-run sandboxes with controlled initial state and uniform limits, supporting artifact-based replication \cite{wilson2014best}.
+\end{itemize}
+
+\subsection{Task Suite}
+
+The suite contains 12 deterministic tasks spanning inspection, transformation, aggregation, conditional branching, and cleanup:
+\begin{itemize}
+    \item \textbf{T01 Count Lines}: Count lines in \texttt{input.txt} and write \texttt{line\_count.txt}.
+    \item \textbf{T02 Extract JSON Field}: Read \texttt{config.json}, extract \texttt{threshold}, write \texttt{threshold.txt}.
+    \item \textbf{T03 Merge Files}: Concatenate \texttt{a.txt} then \texttt{b.txt} into \texttt{merged.txt}.
+    \item \textbf{T04 Rename and Move}: Move \texttt{report.txt} to the target location.
+    \item \textbf{T05 List and Index}: List and sort \texttt{data/files}, write one filename per line to \texttt{index.txt}.
+    \item \textbf{T06 Replace Text}: Replace all \texttt{foo} with \texttt{baz} in \texttt{notes.txt}.
+    \item \textbf{T07 Delete Temporary Files}: Delete \texttt{*.tmp} under \texttt{data/tmp} while preserving other files.
+    \item \textbf{T08 Sum CSV Column}: Sum column \texttt{value} in \texttt{metrics.csv}, write \texttt{total.txt}.
+    \item \textbf{T09 Conditional Copy}: If \texttt{msg.txt} contains \texttt{ALERT}, copy to \texttt{alert.txt}.
+    \item \textbf{T10 Append Log}: Append \texttt{finish} to \texttt{run.log}.
+    \item \textbf{T11 Create Manifest}: List files under \texttt{data/pkg}, write sorted relative paths to \texttt{manifest.txt}.
+    \item \textbf{T12 Normalize Whitespace}: Collapse repeated spaces in \texttt{raw.txt}, write \texttt{normalized.txt}.
+\end{itemize}
+
+These tasks capture typical tool-augmented agent loop patterns while remaining fully locally verifiable \cite{yao2022react, schick2023toolformer}.
+
+\subsection{Execution Protocol}
+
+Each run follows a fixed decision--action loop:
+\begin{enumerate}
+    \item The orchestrator queries the runtime for a structured \texttt{StepAction} (\texttt{tool\_call} or \texttt{finalize}).
+    \item If \texttt{tool\_call} is emitted, the requested filesystem tool is executed under timeout and retry bounds.
+    \item Deterministic validation is executed after each step.
+\end{enumerate}
+
+Execution terminates on first successful validation, explicit \texttt{finalize}, unrecoverable error, or resource-limit exhaustion (step/retry/time).
+
+\subsection{Fault Injection}
+
+Robustness is evaluated with controlled pre-run perturbations applied by the harness: missing files, permission restrictions, injected tool latency, and reduced tool timeouts. Faults are external to the orchestrator and unknown a priori, enabling causal comparison of recovery behavior without modifying task logic \cite{basiri2016chaos}.
+
+\subsection{Validation and Metrics}
+
+Each task has a deterministic validator producing binary success plus structured error metadata. The harness records run-level and step-level telemetry:
+\begin{itemize}
+    \item run-level: \texttt{success}, \texttt{terminal\_reason}, \texttt{failure\_mode}, \texttt{total\_latency\_ms}, LLM calls, tool calls, retries, token usage, estimated cost;
+    \item step-level: action type, tool name, LLM/tool/step latencies, validation status, and \texttt{step\_error\_category}.
+\end{itemize}
+
+\section{Experimental Setup}
+\label{sec:experimental_setup}
+
+We compare orchestrators under identical prompts, tools, and run limits, varying only orchestrator and runtime configuration.
+
+\subsection{Orchestrators Under Test}
+\label{sec:orchestrators}
+
+\begin{itemize}
+    \item \textbf{LangGraph}: explicit graph/state-machine execution.
+    \item \textbf{CrewAI}: role/task-oriented multi-agent coordination.
+    \item \textbf{AutoGen}: conversational multi-agent message passing.
+\end{itemize}
+
+A shared harness interface enforces the same episode template, prompt structure, and bounds across all frameworks.
+
+\subsection{LLM Runtimes and Models}
+\label{sec:runtimes_models}
+
+Primary matrix (cloud):
+\begin{itemize}
+    \item \textbf{OpenAI API}: GPT-5.2
+    \item \textbf{Anthropic API}: Claude Opus 4.6
+    \item \textbf{Google Gemini API}: Gemini 3 Pro (preview)
+    \item \textbf{Mistral API}: Mistral Large
+    \item \textbf{xAI API}: Grok
+\end{itemize}
+
+Mistral and xAI are accessed through OpenAI-compatible transport while preserving provider-specific base URLs and credentials. Ollama is retained for smoke/local debugging and excluded from the primary cloud comparison.
+
+\subsection{Tool Interface and Environment}
+\label{sec:tools_env}
+
+Filesystem tools are provided via Docker MCP Gateway (filesystem MCP server). Each run executes in an isolated sandbox keyed by \texttt{run\_id}. Tool API surface is fixed to \texttt{read\_file}, \texttt{write\_file}, \texttt{list\_directory}, \texttt{create\_directory}, \texttt{delete\_file}, \texttt{move\_file}, \texttt{stat}, and \texttt{search}.
+
+\subsection{Run Cardinality and Configuration}
+\label{sec:cardinality}
+
+The full experiment matrix is:
+\[
+\text{conditions} \times \text{orchestrators} \times \text{runtimes} \times \text{tasks} \times \text{seeds}
+= 13 \times 3 \times 5 \times 12 \times 5 = 11{,}700\ \text{runs}.
+\]
+
+Per-cell sample size is \(n=5\) seeds. Baseline plus 12 fault conditions are enumerated in \texttt{configs/matrix/*.yaml} and executed via \texttt{scripts/run\_matrix.sh}.
+
+\begin{table}[t]
+\centering
+\caption{Matrix dimensions and run cardinality.}
+\label{tab:run_cardinality}
+\begin{tabular}{lr}
+\hline
+Conditions & 13 \\
+Orchestrators & 3 \\
+Runtimes & 5 \\
+Tasks & 12 \\
+Seeds per cell & 5 \\
+Planned total runs & 11,700 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Reproducibility Metadata}
+\label{sec:reproducibility}
+
+For each campaign we record: git commit hash, dirty/clean state, run date window, host hardware, Docker and Docker Compose versions, Python version, package versions, and filesystem image digest. For the current artifact snapshot used in this draft:
+\begin{itemize}
+    \item run commit: \texttt{c5ae9155a4492bdf557535725e138c4da1d79940};
+    \item run window (UTC): 2026-02-09 to 2026-03-10;
+    \item host: macOS arm64 (12 CPU cores, 16 GiB RAM), Python 3.12.12;
+    \item Docker 29.1.3, Docker Compose v2.40.3, \texttt{mcp/filesystem} image digest recorded.
+\end{itemize}
+
+\subsection{Seed Protocol and Ordering}
+\label{sec:seed_protocol}
+
+Target protocol uses fixed seeds \(\{1,2,3,4,5\}\) per cell. The harness executes deterministic nested order
+\texttt{orchestrator \textrightarrow runtime \textrightarrow task \textrightarrow seed} within each condition, and deterministic condition order from the matrix runner. Run order randomization is disabled to maximize trace reproducibility; duplicates/reruns are retained and reported in diagnostics.
+
+\subsection{Statistical Analysis Plan}
+\label{sec:stats_plan}
+
+We report:
+\begin{itemize}
+    \item 95\% bootstrap confidence intervals for group-level success, latency, and retries;
+    \item pairwise permutation tests for orchestrator differences within runtime/fault cells;
+    \item Benjamini--Hochberg correction across each metric family.
+\end{itemize}
+
+All procedures are implemented in \texttt{analysis/stats\_plan.py}; both raw and corrected outputs are archived.
+
+\subsection{Data Handling Rules}
+\label{sec:data_handling}
+
+Timeouts, tool failures, and incomplete runs are \emph{not} excluded. They are retained as \texttt{success=false} with structured terminal labels (e.g., \texttt{timeout}, \texttt{infrastructure\_error}, \texttt{tool\_execution\_error}), preserving failure information required by RQ1--RQ3. Exclusion criteria are empty by default.
+
+\section{Results and Analysis}
+\label{sec:results}
+
+\subsection{Reporting Scope}
+
+This draft reports the current artifact snapshot (131 observed runs in traces) while the full planned matrix is 11,700 runs. Therefore, the interpretations below are \textbf{provisional} and intended to demonstrate reporting structure and figure placement. Final claims should be refreshed after full five-runtime completion.
+
+\subsection{RQ1: Reliability and Recovery}
+\label{sec:rq1_results}
+
+Figure~\ref{fig:rq1_success_ci} reports success rates with 95\% bootstrap CIs by runtime and fault severity. In the current snapshot (Ollama + baseline/timeout-low subset), LangGraph and CrewAI show higher timeout-low success than AutoGen, with overlapping uncertainty due to limited coverage.
+
+\begin{figure}[t]
+\centering
+\IfFileExists{evaluation/figures/fig_11_success_ci_runtime_severity.pdf}{%
+  \includegraphics[width=\columnwidth]{evaluation/figures/fig_11_success_ci_runtime_severity.pdf}%
+}{%
+  \fbox{\parbox{0.95\columnwidth}{Placeholder: generate \texttt{fig\_11\_success\_ci\_runtime\_severity.pdf} via \texttt{python -m analysis.generate\_figures}.}}%
+}%
+\caption{RQ1: Success rate with 95\% bootstrap CIs by runtime and fault severity.}
+\label{fig:rq1_success_ci}
+\end{figure}
+
+To characterize recovery behavior, we analyze termination labels and failure categories rather than only binary success. Figure~\ref{fig:rq1_rq3_fail_modes} shows that timeout and infrastructure-related failures dominate under timeout stress in the current run subset.
+
+\begin{figure}[t]
+\centering
+\IfFileExists{evaluation/figures/fig_12_failure_mode_stacked.pdf}{%
+  \includegraphics[width=\columnwidth]{evaluation/figures/fig_12_failure_mode_stacked.pdf}%
+}{%
+  \fbox{\parbox{0.95\columnwidth}{Placeholder: generate \texttt{fig\_12\_failure\_mode\_stacked.pdf}.}}%
+}%
+\caption{RQ1/RQ3: Failure-mode composition by orchestrator and fault type.}
+\label{fig:rq1_rq3_fail_modes}
+\end{figure}
+
+\subsection{RQ2: Latency Variance and Retry Tradeoffs}
+\label{sec:rq2_results}
+
+Latency dispersion is reported with distributional plots, not only means. Figure~\ref{fig:rq2_latency_cdf} shows latency CDFs per orchestrator/runtime, while Figure~\ref{fig:rq2_retry_dist} shows retry distributions. In the current subset, LangGraph exhibits lower upper-tail latency than AutoGen/CrewAI, and retries are generally sparse.
+
+\begin{figure}[t]
+\centering
+\IfFileExists{evaluation/figures/fig_13_latency_cdf_runtime.pdf}{%
+  \includegraphics[width=\columnwidth]{evaluation/figures/fig_13_latency_cdf_runtime.pdf}%
+}{%
+  \fbox{\parbox{0.95\columnwidth}{Placeholder: generate \texttt{fig\_13\_latency\_cdf\_runtime.pdf}.}}%
+}%
+\caption{RQ2: Latency CDF by orchestrator and runtime.}
+\label{fig:rq2_latency_cdf}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\IfFileExists{evaluation/figures/fig_14_retry_distribution_runtime.pdf}{%
+  \includegraphics[width=\columnwidth]{evaluation/figures/fig_14_retry_distribution_runtime.pdf}%
+}{%
+  \fbox{\parbox{0.95\columnwidth}{Placeholder: generate \texttt{fig\_14\_retry\_distribution\_runtime.pdf}.}}%
+}%
+\caption{RQ2: Retry count distributions by orchestrator and runtime.}
+\label{fig:rq2_retry_dist}
+\end{figure}
+
+Figure~\ref{fig:rq2_tradeoff} links retries and latency directly. In the current traces, retry--latency coupling appears weak because most runs use zero retries; this should be re-estimated after full matrix completion.
+
+\begin{figure}[t]
+\centering
+\IfFileExists{evaluation/figures/fig_15_retry_latency_tradeoff.pdf}{%
+  \includegraphics[width=\columnwidth]{evaluation/figures/fig_15_retry_latency_tradeoff.pdf}%
+}{%
+  \fbox{\parbox{0.95\columnwidth}{Placeholder: generate \texttt{fig\_15\_retry\_latency\_tradeoff.pdf}.}}%
+}%
+\caption{RQ2: Retry--latency tradeoff (scatter/binned trend).}
+\label{fig:rq2_tradeoff}
+\end{figure}
+
+\subsection{RQ3: Failure Modes and Orchestrator Impact}
+\label{sec:rq3_results}
+
+Beyond terminal failure labels, step-level diagnostics identify where failures occur in the decision--tool loop. Figure~\ref{fig:rq3_step_heatmap} presents step error category frequency by tool and fault context, supporting mechanistic interpretation of orchestration failure paths.
+
+\begin{figure}[t]
+\centering
+\IfFileExists{evaluation/figures/fig_16_step_error_heatmap.pdf}{%
+  \includegraphics[width=\columnwidth]{evaluation/figures/fig_16_step_error_heatmap.pdf}%
+}{%
+  \fbox{\parbox{0.95\columnwidth}{Placeholder: generate \texttt{fig\_16\_step\_error\_heatmap.pdf}.}}%
+}%
+\caption{RQ3: Step-level error-category heatmap by tool/fault context.}
+\label{fig:rq3_step_heatmap}
+\end{figure}
+
+Across current traces, dominant run-level failure modes are \texttt{timeout}, \texttt{infrastructure\_error}, and \texttt{tool\_execution\_error}. This distribution indicates that resilience under stressed tool calls is a first-order differentiator among orchestration designs.
+
+\subsection{Summary for Current Snapshot}
+
+On the currently available subset (131 runs, primarily timeout-low and baseline with Ollama), provisional ordering favors LangGraph and CrewAI over AutoGen for reliability under timeout stress, while LangGraph shows lower latency tails. Because runtime diversity and seed coverage are incomplete relative to the 11,700-run design, these statements are preliminary and should be updated after full matrix execution.
